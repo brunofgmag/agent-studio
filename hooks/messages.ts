@@ -40,6 +40,7 @@ export type RowParts = {
   ticking?: TickingMeta
   description: string
   isDim?: boolean
+  isNotice?: boolean
 }
 
 export type SubagentGroup = { heading: string; lines: readonly SubagentLine[] }
@@ -111,7 +112,7 @@ const NO_AGENT_COLOR = 'subtle'
 
 const PORTUGUESE_TAGS: readonly string[] = ['pt-br', 'pt']
 
-const cut = (text: string, limit = DESCRIPTION_LIMIT): string => {
+export const cut = (text: string, limit = DESCRIPTION_LIMIT): string => {
   const flat = text.replace(/\s+/g, ' ').trim()
 
   return flat.length <= limit ? flat : `${flat.slice(0, limit - 1).trimEnd()}…`

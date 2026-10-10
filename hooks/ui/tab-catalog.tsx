@@ -3,12 +3,13 @@ import type { RenderElement } from 'claude-code'
 import type { CatalogAgent, CatalogView, ModelSwitch } from '../../types'
 import type { Messages } from '../messages'
 import type { PaneElements } from './pane'
-import { drawActionRow } from './row'
+import { type Room, type RowAction, drawActionRow } from './row'
 
 export type CatalogTabView = {
   hasLauncher: boolean
   catalog: CatalogView | null
   pendingUse: string | null
+  room: Room
 }
 
 export type CatalogTabActions = {
@@ -18,7 +19,9 @@ export type CatalogTabActions = {
 const rowOf = (messages: Messages, agent: CatalogAgent, pending: ModelSwitch | undefined) => {
   const parts = messages.catalogRow(agent)
 
-  return pending === undefined ? parts : { ...parts, description: messages.modelChanges(pending.from, pending.to) }
+  return pending === undefined
+    ? parts
+    : { ...parts, description: messages.modelChanges(pending.from, pending.to), isNotice: true }
 }
 
 const drawAgent = (
@@ -27,19 +30,17 @@ const drawAgent = (
   agent: CatalogAgent,
   canUse: boolean,
   pendingUse: string | null,
+  room: Room,
   actions: CatalogTabActions,
 ) => {
   const { Box, Button } = elements
   const pending = pendingUse === agent.name ? agent.modelSwitch : undefined
-  const use = canUse ? (
-    <Button
-      key={`use-${agent.name}`}
-      label={pending === undefined ? messages.USE_LABEL : messages.CONFIRM_LABEL}
-      onPress={() => actions.use(agent.name)}
-    />
-  ) : undefined
+  const label = pending === undefined ? messages.USE_LABEL : messages.CONFIRM_LABEL
+  const use: RowAction | undefined = canUse
+    ? { label, element: <Button key={`use-${agent.name}`} label={label} onPress={() => actions.use(agent.name)} /> }
+    : undefined
 
-  return <Box marginTop={1}>{drawActionRow(elements, rowOf(messages, agent, pending), use)}</Box>
+  return <Box marginTop={1}>{drawActionRow(elements, rowOf(messages, agent, pending), room, use)}</Box>
 }
 
 const drawCatalog = (
@@ -47,6 +48,7 @@ const drawCatalog = (
   messages: Messages,
   { agents, skipped, native }: CatalogView,
   pendingUse: string | null,
+  room: Room,
   actions: CatalogTabActions,
 ): RenderElement => {
   const { Box, Text } = elements
@@ -60,7 +62,7 @@ const drawCatalog = (
       ) : (
         <Box flexDirection="column">
           <Text bold>{messages.catalogHeading(agents.length)}</Text>
-          {agents.map(agent => drawAgent(elements, messages, agent, canUse, pendingUse, actions))}
+          {agents.map(agent => drawAgent(elements, messages, agent, canUse, pendingUse, room, actions))}
         </Box>
       )}
       {skipped === 0 ? null : (
@@ -84,5 +86,5 @@ export const drawCatalogTab = (
     return <Text>{messages.launcherOff}</Text>
   }
 
-  return view.catalog === null ? <Text>{messages.catalogUnreadable}</Text> : drawCatalog(elements, messages, view.catalog, view.pendingUse, actions)
+  return view.catalog === null ? <Text>{messages.catalogUnreadable}</Text> : drawCatalog(elements, messages, view.catalog, view.pendingUse, view.room, actions)
 }

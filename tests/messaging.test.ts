@@ -553,9 +553,9 @@ test('a send that throws with the auto mode wording in its message is still no r
   expect(toasts).toEqual([`Não foi possível enviar a mensagem para a sessão em C:/work/api: ${AUTO_REFUSAL}`])
 })
 
-const FOCUSED = { columns: 80, isFocused: true }
+const FOCUSED = { columns: 80, surface: 'terminal', isFocused: true }
 
-const UNFOCUSED = { columns: 80, isFocused: false }
+const UNFOCUSED = { columns: 80, surface: 'terminal', isFocused: false }
 
 const focusStage = (denied: readonly string[] = []) => {
   const focused: string[] = []

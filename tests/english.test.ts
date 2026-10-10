@@ -452,7 +452,9 @@ test('the catalog heading and the Use and Confirm buttons read in English on tab
   await ui.press({ key: 'use-worker' })
 
   expect(await labelOf(ui, 'use-worker')).toBe('Confirm')
-  expect(await hasText(ui, `The model changes from ${SESSION_MODEL} to ${OPUS}. The next turn rereads the whole conversation without cache.`)).toBe(true)
+  const warning = `The model changes from ${SESSION_MODEL} to ${OPUS}. The next turn rereads the whole conversation without cache.`
+
+  expect(await hasText(ui, warning)).toBe(true)
   await ui.unmount()
 })
 

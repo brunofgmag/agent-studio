@@ -1358,6 +1358,16 @@ const ONE_MINUTE = 60_000
 
 const HEARTBEAT_MS = 15_000
 
+const API_DESCRIPTION = '2 subagentes · Mapped the payment module and found two call sites that skip validation.'
+
+const ROW_BUDGETS: Record<Surface, { root: number; nested: number }> = {
+  terminal: { root: 76, nested: 74 },
+  desktop: { root: 89, nested: 87 },
+}
+
+const fitted = (text: string, budget: number) =>
+  text.length <= budget ? text : `${text.slice(0, budget - 1).trimEnd()}…`
+
 const peerStore = (): Record<string, unknown> => ({
   'sess:working-1': entry({
     cwd: 'C:/work/api',
@@ -1421,13 +1431,82 @@ eachSurface('tab 2 rows carry the presence colour, the dim name of an encerrada,
     mark: '●',
     color: 'success',
     meta: '@architect · trabalhando · 1:23',
-    description: '2 subagentes · Mapped the payment module and found two call sites that skip validation.',
+    description: fitted(API_DESCRIPTION, ROW_BUDGETS[surface].root),
   })
   expect(rows.lib).toMatchObject({ color: 'warning', meta: 'sem agente · ociosa · há 1 s', description: 'C:/work/lib' })
   expect(rows.web).toMatchObject({ color: 'inactive', meta: 'sem agente · inativa · há 1 min', description: 'C:/work/web' })
   expect(rows.docs).toMatchObject({ color: 'inactive', meta: '@writer · encerrada · há 2 min', description: 'C:/work/docs' })
   expect([rows.api, rows.lib, rows.web].map(row => row?.isNameDim)).toEqual([false, false, false])
   expect(rows.docs?.isNameDim).toBe(true)
+  await ui.unmount()
+})
+
+const descriptionsByKey = async (ui: Mounted) => Object.fromEntries((await rowFacts(ui)).map(row => [row.key, row.description]))
+
+eachSurface('tab 1 ends a long task with an ellipsis at the room its row has, two cells less for each level of depth', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+  await spawn($, { description: 'p'.repeat(300) })
+  await spawn($, { description: 'c'.repeat(300), parentAgentId: 'sub-1' })
+  await agentPanel($)
+
+  const ui = await mountPane($, surface)
+  const descriptions = await descriptionsByKey(ui)
+
+  expect(descriptions['sub-sub-1']).toBe(`${'p'.repeat(ROW_BUDGETS[surface].root - 1)}…`)
+  expect(descriptions['sub-sub-2']).toBe(`${'c'.repeat(ROW_BUDGETS[surface].nested - 1)}…`)
+  await ui.unmount()
+})
+
+eachSurface('tab 1 draws a short task whole', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+  await spawn($, { description: 'read the logs' })
+  await agentPanel($)
+
+  const ui = await mountPane($, surface)
+
+  expect((await descriptionsByKey(ui))['sub-sub-1']).toBe('read the logs')
+  await ui.unmount()
+})
+
+eachSurface('tab 2 ends a long answer with an ellipsis at the room of the row', async (surface, $, on) => {
+  stage(on, surface, { 'sess:talker-1': entry({ cwd: 'C:/work/talker', lastAnswer: 'w'.repeat(300), updatedAt: NOW - 1000 }) })
+  await begin($)
+  await agentPanel($, 'sessions')
+
+  const ui = await mountPane($, surface)
+
+  expect((await descriptionsByKey(ui))['sess-talker-1']).toBe(`${'w'.repeat(ROW_BUDGETS[surface].root - 1)}…`)
+  await ui.unmount()
+})
+
+test('the desktop fits more characters than the terminal in the same row of tab 2', async ($, on) => {
+  stage(on, 'terminal', { 'sess:talker-1': entry({ cwd: 'C:/work/talker', lastAnswer: 'w'.repeat(300), updatedAt: NOW - 1000 }) })
+  await begin($)
+  await agentPanel($, 'sessions')
+
+  const terminal = await mountPane($, 'terminal')
+  const desktop = await mountPane($, 'desktop')
+  const onTerminal = (await descriptionsByKey(terminal))['sess-talker-1']
+  const onDesktop = (await descriptionsByKey(desktop))['sess-talker-1']
+
+  expect(onDesktop?.length).toBeGreaterThan(onTerminal?.length ?? 0)
+  await terminal.unmount()
+  await desktop.unmount()
+})
+
+eachSurface('the detail header of a subagent cuts its long task at the room of a line with no indent', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+  await spawn($, { description: 'p'.repeat(300) })
+  await agentPanel($)
+
+  const ui = await mountPane($, surface)
+
+  await ui.press({ key: 'sub-sub-1' })
+
+  expect((await ui.find({ type: 'Text', text: /^p+…$/ }))?.text).toBe(`${'p'.repeat(ROW_BUDGETS[surface].root - 1)}…`)
   await ui.unmount()
 })
 
@@ -1544,7 +1623,7 @@ eachSurface('the detail of another session is the actions, the header, the cwd, 
     'api',
     '@architect · trabalhando ·',
     'clock-header',
-    '2 subagentes · Mapped the payment module and found two call sites that skip validation.',
+    fitted(API_DESCRIPTION, ROW_BUDGETS[surface].root),
     'C:/work/api',
     'Última resposta',
     'last-answer',

@@ -4,12 +4,13 @@ import type { OtherSession } from '../../types'
 import type { Messages, SessionGroup } from '../messages'
 import { drawMessageField } from './message-field'
 import type { PaneElements } from './pane'
-import { drawActionRow, drawNote, drawPanel, drawPressableRow } from './row'
+import { type Room, drawActionRow, drawNote, drawPanel, drawPressableRow } from './row'
 
 export type PeersView = {
   sessions: readonly OtherSession[]
   open: OtherSession | null
   now: number
+  room: Room
 }
 
 export type PeersActions = {
@@ -24,16 +25,19 @@ const drawSession = (
   messages: Messages,
   session: OtherSession,
   now: number,
+  room: Room,
   actions: PeersActions,
 ) => {
   const { Box } = elements
 
   return (
     <Box marginTop={1}>
-      {drawPressableRow(elements, messages.sessionRow(session, now), {
-        key: `sess-${session.sessionId}`,
-        onPress: () => actions.open(session.sessionId),
-      })}
+      {drawPressableRow(
+        elements,
+        messages.sessionRow(session, now),
+        { key: `sess-${session.sessionId}`, onPress: () => actions.open(session.sessionId) },
+        room,
+      )}
     </Box>
   )
 }
@@ -44,6 +48,7 @@ const drawGroup = (
   group: SessionGroup,
   index: number,
   now: number,
+  room: Room,
   actions: PeersActions,
 ) => {
   const { Box, Text } = elements
@@ -51,7 +56,7 @@ const drawGroup = (
   return (
     <Box flexDirection="column" marginTop={index === 0 ? 0 : 1}>
       <Text dimColor>{group.heading}</Text>
-      {group.sessions.map(session => drawSession(elements, messages, session, now, actions))}
+      {group.sessions.map(session => drawSession(elements, messages, session, now, room, actions))}
     </Box>
   )
 }
@@ -69,7 +74,7 @@ const drawList = (
       {view.sessions.length === 0 ? (
         <Text>{messages.noOtherSessions}</Text>
       ) : (
-        messages.sessionGroups(view.sessions).map((group, index) => drawGroup(elements, messages, group, index, view.now, actions))
+        messages.sessionGroups(view.sessions).map((group, index) => drawGroup(elements, messages, group, index, view.now, view.room, actions))
       )}
       <Box marginTop={1}>
         <Text dimColor>{messages.listHint}</Text>
@@ -90,13 +95,13 @@ const drawActions = (
   </Box>
 )
 
-const drawIdentity = (elements: PaneElements, messages: Messages, session: OtherSession, now: number) => {
+const drawIdentity = (elements: PaneElements, messages: Messages, session: OtherSession, now: number, room: Room) => {
   const { Box } = elements
   const parts = messages.sessionRow(session, now)
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      {drawActionRow(elements, parts)}
+      {drawActionRow(elements, parts, room)}
       {parts.description === session.cwd ? null : drawNote(elements, session.cwd)}
     </Box>
   )
@@ -133,6 +138,7 @@ const drawDetail = (
   messages: Messages,
   session: OtherSession,
   now: number,
+  room: Room,
   actions: PeersActions,
 ): RenderElement => {
   const { Box } = elements
@@ -140,7 +146,7 @@ const drawDetail = (
   return (
     <Box flexDirection="column">
       {drawActions(elements, messages, session, actions)}
-      {drawIdentity(elements, messages, session, now)}
+      {drawIdentity(elements, messages, session, now, room)}
       {drawLastAnswer(elements, messages, session)}
       {drawSubagents(elements, messages, session)}
       {drawMessageField(elements, messages, 'message-0', messages.MESSAGE_PLACEHOLDER_SESSION, text => actions.send(session, text))}
@@ -156,4 +162,4 @@ export const drawPeers = (
 ): RenderElement =>
   view.open === null
     ? drawList(elements, messages, view, actions)
-    : drawDetail(elements, messages, view.open, view.now, actions)
+    : drawDetail(elements, messages, view.open, view.now, view.room, actions)

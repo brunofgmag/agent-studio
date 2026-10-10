@@ -175,6 +175,28 @@ const agentPanel = ($: Engine, args = '') => run($, 'agent-panel', args)
 const mountPane = ($: Engine, surface: Surface) =>
   $.ui.mount({ plugin: 'agent-studio', surface, component: 'Pane', requestId: 'agent-studio', props: PANE_PROPS })
 
+const mountPaneAt = ($: Engine, surface: Surface, columns: number) =>
+  $.ui.mount({
+    plugin: 'agent-studio',
+    surface,
+    component: 'Pane',
+    requestId: 'agent-studio',
+    props: { ...PANE_PROPS, bodyColumns: columns },
+  })
+
+const BUDGETS: Record<Surface, { button: number; confirm: number }> = {
+  terminal: { button: 69, confirm: 64 },
+  desktop: { button: 81, confirm: 76 },
+}
+
+const NARROW_BUDGETS: Record<Surface, { button: number; bare: number }> = {
+  terminal: { button: 49, bare: 56 },
+  desktop: { button: 57, bare: 65 },
+}
+
+const fitted = (text: string, budget: number) =>
+  text.length <= budget ? text : `${text.slice(0, budget - 1).trimEnd()}…`
+
 const mountMobile = ($: Engine) =>
   $.ui.mount({ plugin: 'agent-studio', surface: 'mobile', component: 'Pane', requestId: 'agent-studio', props: PANE_PROPS })
 
@@ -357,7 +379,7 @@ eachSurface('tab 3 cuts a long description and marks the active agent with the w
   const ui = await mountPane($, surface)
   const rows = await rowTexts(ui)
 
-  expect(rows.find(row => row.name === 'verbose')?.description).toBe(`${'a'.repeat(79)}…`)
+  expect(rows.find(row => row.name === 'verbose')?.description).toBe(fitted(`${'a'.repeat(79)}…`, BUDGETS[surface].button))
   expect(rows.find(row => row.name === 'worker')?.meta).toBe('projeto · modelo: claude-opus-5-5[1m] · 2 ferramentas · ativo')
   expect(rows.filter(row => row.meta.endsWith(' · ativo'))).toHaveLength(1)
   await ui.unmount()
@@ -434,6 +456,67 @@ eachSurface('a catalog row without a button keeps the description under the iden
   expect(description?.children?.[0]?.children).toEqual(['worker description'])
   expect(await ui.find({ type: 'Button', text: 'Usar' })).toBeUndefined()
   await ui.unmount()
+})
+
+const VERBOSE = { [pathOf('verbose')]: agentFile('verbose', '', 'a'.repeat(100)), ...DEFAULT_FILES }
+
+const NARROW = 60
+
+const verboseAt = async ($: Engine, surface: Surface) => {
+  const ui = await mountPaneAt($, surface, NARROW)
+  const description = (await rowTexts(ui)).find(row => row.name === 'verbose')?.description
+
+  await ui.unmount()
+
+  return description
+}
+
+eachSurface('tab 3 ends a long description with an ellipsis at the room the button leaves', async (surface, $, on) => {
+  stage(on, VERBOSE)
+  await begin($)
+  await as($)
+
+  const description = await verboseAt($, surface)
+
+  expect(description?.endsWith('…')).toBe(true)
+  expect(description).toHaveLength(NARROW_BUDGETS[surface].button)
+})
+
+eachSurface('tab 3 draws a short description whole however narrow the pane is', async (surface, $, on) => {
+  stage(on, VERBOSE)
+  await begin($)
+  await as($)
+
+  const ui = await mountPaneAt($, surface, NARROW)
+
+  expect((await rowTexts(ui)).find(row => row.name === 'plain')?.description).toBe('plain description')
+  await ui.unmount()
+})
+
+eachSurface('tab 3 gives a row with no button the room the button would have taken', async (surface, $, on) => {
+  stage(on, VERBOSE)
+  await begin($)
+  await $.classic.SessionStart({ source: 'startup', agent_type: 'architect' } as never)
+  await as($)
+
+  const description = await verboseAt($, surface)
+
+  expect(description?.endsWith('…')).toBe(true)
+  expect(description).toHaveLength(NARROW_BUDGETS[surface].bare)
+  expect(NARROW_BUDGETS[surface].bare).toBeGreaterThan(NARROW_BUDGETS[surface].button)
+})
+
+test('tab 3 fits more characters on the desktop than on the terminal at the same width', async ($, on) => {
+  stage(on, VERBOSE)
+  await begin($)
+  await as($)
+
+  const terminal = await verboseAt($, 'terminal')
+  const desktop = await verboseAt($, 'desktop')
+
+  expect(terminal).toHaveLength(NARROW_BUDGETS.terminal.button)
+  expect(desktop).toHaveLength(NARROW_BUDGETS.desktop.button)
+  expect(desktop?.length).toBeGreaterThan(terminal?.length ?? 0)
 })
 
 eachSurface('tab 3 counts the ignored files and says where the reasons are', async (surface, $, on) => {
@@ -853,6 +936,7 @@ eachSurface('the first press on an agent that switches the model asks to confirm
   expect(await as($, '?')).toContain('Nenhum agente ativo')
   expect(await labelOf(ui, 'worker')).toBe('Confirmar')
   expect(await descriptionOf(ui, 'worker')).toBe(changeLine(SESSION_MODEL, OPUS))
+  expect((await ui.find({ type: 'Text', text: changeLine(SESSION_MODEL, OPUS) }))?.props.wrap).toBe('wrap')
   expect(await labelOf(ui, 'sonnet')).toBe('Usar')
   expect(await descriptionOf(ui, 'sonnet')).toBe('sonnet description')
   await ui.unmount()

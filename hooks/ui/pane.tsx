@@ -4,6 +4,7 @@ import type { CatalogView, OtherSession, PaneTab, SubagentLine } from '../../typ
 import type { Messages } from '../messages'
 import { SESSIONS_ARGUMENT, type Monitor } from '../monitor/index'
 import type { ClockPort, TimerPort } from '../monitor/registry'
+import { type Room, SIDE_ROOM } from './row'
 import { drawCatalogTab } from './tab-catalog'
 import { drawPeers } from './tab-peers'
 import { drawSession } from './tab-session'
@@ -42,7 +43,7 @@ export type PaneMonitor = Pick<
   'lines' | 'agentInForce' | 'checkAgainstEngine' | 'lastOthers' | 'readOthers' | 'sent'
 >
 
-export type PaneFrame = { columns: number; isFocused: boolean }
+export type PaneFrame = Room & { isFocused: boolean }
 
 export type Pane = {
   open: (host: PaneHost, tab?: PaneTab) => Promise<boolean>
@@ -60,8 +61,6 @@ export const BEAT_MS = 2000
 export const TICK_MS = 5000
 
 const BACK_KEY = 'back'
-
-const SIDE_ROOM = 1
 
 const TABS: readonly PaneTab[] = [1, 2, 3]
 
@@ -428,7 +427,7 @@ export const createPane = (monitor: PaneMonitor, messages: Messages): Pane => {
     sentCounts.set(id, (sentCounts.get(id) ?? 0) + 1)
   }
 
-  const drawThisSession = (elements: PaneElements, host: PaneHost, now: number) => {
+  const drawThisSession = (elements: PaneElements, host: PaneHost, now: number, room: Room) => {
     const lines = monitor.lines()
     const open = lines.find(({ id }) => id === openSubagent) ?? null
 
@@ -447,6 +446,7 @@ export const createPane = (monitor: PaneMonitor, messages: Messages): Pane => {
         areEarlierOpen,
         sentCount: sentCounts.get(open?.id ?? '') ?? 0,
         now,
+        room,
       },
       {
         open: id => {
@@ -474,7 +474,7 @@ export const createPane = (monitor: PaneMonitor, messages: Messages): Pane => {
     )
   }
 
-  const drawOtherSessions = (elements: PaneElements, host: PaneHost, now: number) => {
+  const drawOtherSessions = (elements: PaneElements, host: PaneHost, now: number, room: Room) => {
     const sessions = monitor.lastOthers()
     const open = sessions.find(({ sessionId }) => sessionId === openSession) ?? null
 
@@ -483,7 +483,7 @@ export const createPane = (monitor: PaneMonitor, messages: Messages): Pane => {
     return drawPeers(
       elements,
       messages,
-      { sessions, open, now },
+      { sessions, open, now, room },
       {
         open: sessionId => {
           openSession = sessionId
@@ -501,20 +501,20 @@ export const createPane = (monitor: PaneMonitor, messages: Messages): Pane => {
     )
   }
 
-  const drawAgents = (elements: PaneElements, host: PaneHost) =>
+  const drawAgents = (elements: PaneElements, host: PaneHost, room: Room) =>
     drawCatalogTab(
       elements,
       messages,
-      { hasLauncher: host.agents !== undefined, catalog, pendingUse },
+      { hasLauncher: host.agents !== undefined, catalog, pendingUse, room },
       { use: name => useAgent(host, name) },
     )
 
-  const drawBody = (elements: PaneElements, host: PaneHost, now: number): RenderElement => {
+  const drawBody = (elements: PaneElements, host: PaneHost, now: number, room: Room): RenderElement => {
     if (tab === 1) {
-      return drawThisSession(elements, host, now)
+      return drawThisSession(elements, host, now, room)
     }
 
-    return tab === 2 ? drawOtherSessions(elements, host, now) : drawAgents(elements, host)
+    return tab === 2 ? drawOtherSessions(elements, host, now, room) : drawAgents(elements, host, room)
   }
 
   return {
@@ -528,7 +528,7 @@ export const createPane = (monitor: PaneMonitor, messages: Messages): Pane => {
 
       return next === 1 ? messages.panelOpened : messages.panelOpenedOnSessions
     },
-    render: async (host, elements, { columns, isFocused }) => {
+    render: async (host, elements, { columns, surface, isFocused }) => {
       const drawn = new Map<string, () => void>()
       const tracked = trackingPresses(elements, drawn)
       const { Box, Text } = tracked
@@ -540,7 +540,7 @@ export const createPane = (monitor: PaneMonitor, messages: Messages): Pane => {
             {'─'.repeat(Math.max(columns - 2 * SIDE_ROOM, 0))}
           </Text>
           <Box flexDirection="column" marginTop={1}>
-            {drawBody(tracked, host, now)}
+            {drawBody(tracked, host, now, { columns, surface })}
           </Box>
         </Box>
       )

@@ -4,7 +4,7 @@ import type { CatalogView, Exchange, SubagentLine } from '../../types'
 import type { Messages, SubagentGroup } from '../messages'
 import { drawMessageField } from './message-field'
 import type { PaneElements } from './pane'
-import { drawActionRow, drawNote, drawPanel, drawPressableRow } from './row'
+import { type Room, drawActionRow, drawNote, drawPanel, drawPressableRow } from './row'
 
 export type SessionView = {
   agentStatus: string | null
@@ -16,6 +16,7 @@ export type SessionView = {
   areEarlierOpen: boolean
   sentCount: number
   now: number
+  room: Room
 }
 
 export type SessionActions = {
@@ -86,16 +87,21 @@ const drawLine = (
   messages: Messages,
   line: SubagentLine,
   now: number,
+  room: Room,
   actions: SessionActions,
 ) => {
   const { Box } = elements
+  const indent = line.depth * INDENT
 
   return (
-    <Box paddingLeft={line.depth * INDENT} marginTop={1}>
-      {drawPressableRow(elements, messages.subagentRow(line, now), {
-        key: `sub-${line.id}`,
-        onPress: () => actions.open(line.id),
-      })}
+    <Box paddingLeft={indent} marginTop={1}>
+      {drawPressableRow(
+        elements,
+        messages.subagentRow(line, now),
+        { key: `sub-${line.id}`, onPress: () => actions.open(line.id) },
+        room,
+        indent,
+      )}
     </Box>
   )
 }
@@ -106,6 +112,7 @@ const drawGroup = (
   group: SubagentGroup,
   index: number,
   now: number,
+  room: Room,
   actions: SessionActions,
 ) => {
   const { Box, Text } = elements
@@ -113,7 +120,7 @@ const drawGroup = (
   return (
     <Box flexDirection="column" marginTop={index === 0 ? 0 : 1}>
       <Text dimColor>{group.heading}</Text>
-      {group.lines.map(line => drawLine(elements, messages, line, now, actions))}
+      {group.lines.map(line => drawLine(elements, messages, line, now, room, actions))}
     </Box>
   )
 }
@@ -142,7 +149,7 @@ const drawList = (
         {view.lines.length === 0 ? (
           <Text>{messages.noSubagents}</Text>
         ) : (
-          messages.subagentGroups(view.lines).map((group, index) => drawGroup(elements, messages, group, index, view.now, actions))
+          messages.subagentGroups(view.lines).map((group, index) => drawGroup(elements, messages, group, index, view.now, view.room, actions))
         )}
       </Box>
       <Box marginTop={1}>
@@ -172,12 +179,12 @@ const drawActions = (
   </Box>
 )
 
-const drawIdentity = (elements: PaneElements, messages: Messages, line: SubagentLine, now: number) => {
+const drawIdentity = (elements: PaneElements, messages: Messages, line: SubagentLine, now: number, room: Room) => {
   const { Box } = elements
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      {drawActionRow(elements, messages.subagentRow(line, now))}
+      {drawActionRow(elements, messages.subagentRow(line, now), room)}
       {line.model === null ? null : drawNote(elements, line.model)}
       {line.cachedTokens > 0 ? drawNote(elements, messages.tokensWithCache(line)) : null}
     </Box>
@@ -280,7 +287,7 @@ const drawDetail = (
   return (
     <Box flexDirection="column">
       {drawActions(elements, messages, line, actions)}
-      {drawIdentity(elements, messages, line, view.now)}
+      {drawIdentity(elements, messages, line, view.now, view.room)}
       {drawPrompt(elements, messages, line, view.isPromptOpen, actions)}
       {drawConversation(elements, messages, line, view.areEarlierOpen, actions)}
       {drawMessageField(elements, messages, `message-${view.sentCount}`, messages.MESSAGE_PLACEHOLDER_SUBAGENT, text => actions.send(line, text))}

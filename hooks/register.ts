@@ -372,6 +372,7 @@ export const register: Register = (on, options) => {
     on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) =>
       pane.render(paneHostOf($, messages, launcher, monitor), elementsOf($, e), {
         columns: e.props.bodyColumns,
+        surface: e.surface,
         isFocused: e.props.isFocused,
       }),
     ).catch((_$, e, next) => next(e))

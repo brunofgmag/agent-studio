@@ -598,16 +598,17 @@ test('/agent-panel sessions with nothing else in the store says so', async ($, o
   expect(await agentPanel($, 'sessions')).toBe('Nenhuma outra sessão registrada.')
 })
 
+const DAY_MS = 24 * 60 * 60 * 1000
+
 test('/agent-panel sessions prunes an entry 24 hours old and leaves launcher keys alone', async ($, on) => {
   const world = stage(on, {
     store: {
-      'sess:ancient': entry({ updatedAt: NOW - 1000 }),
-      'launcher:ancient': entry({ updatedAt: NOW - 1000 }),
+      'sess:ancient': entry({ updatedAt: NOW - DAY_MS - 1 }),
+      'launcher:ancient': entry({ updatedAt: NOW - DAY_MS - 1 }),
     },
   })
 
   await begin($)
-  await world.clock.set(NOW + 24 * 60 * 60 * 1000 + 1)
 
   expect(await agentPanel($, 'sessions')).toBe('Nenhuma outra sessão registrada.')
   expect(world.deletes).toEqual(['sess:ancient'])
