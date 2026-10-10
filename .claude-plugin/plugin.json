@@ -1,0 +1,21 @@
+{
+  "name": "agent-studio",
+  "version": "0.1.0",
+  "description": "Sessões como agente (/as) e painel de agentes",
+  "author": { "name": "Bruno" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "enableLauncher": {
+      "type": "boolean",
+      "title": "Launcher",
+      "description": "Liga o comando /as, que faz a sessão atuar como um agente de .claude/agents",
+      "default": true
+    },
+    "modelAliases": {
+      "type": "string",
+      "title": "Apelidos de modelo",
+      "description": "Pares apelido=id separados por vírgula, usados quando o agente declara o modelo por apelido, como model: opus",
+      "default": "opus=claude-opus-5-5,sonnet=claude-sonnet-5-5,haiku=claude-haiku-5-5"
+    }
+  }
+}
