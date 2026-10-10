@@ -1,7 +1,8 @@
 import type { AgentInfo, On, UiOpenResult } from 'claude-code'
-import { type Engine, type Plugin, expect, mock, test } from 'claude-code/testing'
+import { type Engine, type Plugin, expect, mock } from 'claude-code/testing'
 
 import type { SessionEntry } from '../types'
+import { test } from './in-portuguese'
 
 type Surface = 'terminal' | 'desktop'
 
@@ -202,8 +203,9 @@ const run = ($: Engine, command: string, args: string) =>
 
 const summaryOf = (world: Stage) => world.statuses.at(-1)
 
-const ACTIVE_PEERS = {
+const MIXED_PEERS = {
   'sess:working-1': peer({ state: 'working' }),
+  'sess:working-5': peer({ state: 'working' }),
   'sess:idle-2': peer({ state: 'idle' }),
   'sess:stale-3': peer({ state: 'working', updatedAt: NOW - 61_000 }),
   'sess:ended-4': peer({ state: 'ended' }),
@@ -332,8 +334,8 @@ eachSurface('running subagents are counted in the singular and the plural and th
   await ui.unmount()
 })
 
-eachSurface('active sessions are the working and idle ones, counted in the plural, and read at the beat', async (surface, $, on) => {
-  const world = stage(on, ACTIVE_PEERS)
+eachSurface('only the sessions with a turn running are counted, in the plural, and read at the beat', async (surface, $, on) => {
+  const world = stage(on, MIXED_PEERS)
   await begin($)
 
   const ui = await mountFooter($, surface)
@@ -342,11 +344,11 @@ eachSurface('active sessions are the working and idle ones, counted in the plura
 
   await world.clock.advance(15_000)
 
-  expect(summaryOf(world)).toBe('2 sessões ativas')
+  expect(summaryOf(world)).toBe('2 sessões trabalhando')
   await ui.unmount()
 })
 
-eachSurface('one active session is singular and the status is cleared when it is no longer active', async (surface, $, on) => {
+eachSurface('one session working is singular and the status is cleared when it is no longer working', async (surface, $, on) => {
   const world = stage(on, { 'sess:working-1': peer({ state: 'working', updatedAt: NOW + 15_000 }) })
   await begin($)
 
@@ -354,18 +356,31 @@ eachSurface('one active session is singular and the status is cleared when it is
 
   await world.clock.advance(15_000)
 
-  expect(summaryOf(world)).toBe('1 sessão ativa')
+  expect(summaryOf(world)).toBe('1 sessão trabalhando')
 
   world.store.set('sess:working-1', peer({ state: 'ended', updatedAt: NOW + 15_000 }))
   await world.clock.advance(15_000)
 
   expect(summaryOf(world)).toBeUndefined()
-  expect(world.statuses).toEqual(['1 sessão ativa', undefined])
+  expect(world.statuses).toEqual(['1 sessão trabalhando', undefined])
+  await ui.unmount()
+})
+
+eachSurface('idle sessions alone give no session count and no status', async (surface, $, on) => {
+  const world = stage(on, { 'sess:idle-1': peer({ state: 'idle' }), 'sess:idle-2': peer({ state: 'idle' }) })
+  await begin($)
+
+  const ui = await mountFooter($, surface)
+
+  await world.clock.advance(15_000)
+
+  expect(summaryOf(world)).toBeUndefined()
+  expect(world.statuses).toEqual([])
   await ui.unmount()
 })
 
 eachSurface('the parts come in order, joined by a middle dot, each only when it has a value', async (surface, $, on) => {
-  const world = stage(on, ACTIVE_PEERS)
+  const world = stage(on, MIXED_PEERS)
   await begin($)
   await run($, 'as', 'worker')
   await spawn($)
@@ -375,7 +390,7 @@ eachSurface('the parts come in order, joined by a middle dot, each only when it 
 
   await world.clock.advance(15_000)
 
-  expect(summaryOf(world)).toBe('@worker · 2 subagentes rodando · 2 sessões ativas')
+  expect(summaryOf(world)).toBe('@worker · 2 subagentes rodando · 2 sessões trabalhando')
   await ui.unmount()
 })
 
@@ -404,8 +419,36 @@ eachSurface('the summary reaches the status line by itself after the grouped wri
 
   await world.clock.advance(1)
 
-  expect(summaryOf(world)).toBe('1 subagente rodando · 1 sessão ativa')
+  expect(summaryOf(world)).toBe('1 subagente rodando · 1 sessão trabalhando')
   await ui.unmount()
+})
+
+eachSurface('the summary reaches the status line when the counts or the peers change with no render asked, and an unchanged summary sends nothing', async (surface, $, on) => {
+  let renders = 0
+
+  on('ui.invalidate', (_$, e, next) => {
+    if (e.event === 'ui.render') {
+      renders += 1
+    }
+
+    return next(e)
+  })
+
+  const world = stage(on, MIXED_PEERS)
+  await begin($)
+  await spawn($)
+  await world.clock.advance(1000)
+
+  expect(world.statuses).toEqual(['1 subagente rodando'])
+
+  await world.clock.advance(14_000)
+
+  expect(world.statuses).toEqual(['1 subagente rodando', '1 subagente rodando · 2 sessões trabalhando'])
+
+  await world.clock.advance(30_000)
+
+  expect(world.statuses).toHaveLength(2)
+  expect(renders).toBe(0)
 })
 
 eachSurface('a redraw whose summary equals the last one sent calls the status line no more', async (surface, $, on) => {
@@ -499,7 +542,7 @@ eachSurface('a failing status call is swallowed, the footer is still drawn and t
 })
 
 eachSurface('the beat reads the other sessions once, and drawing the footer reads nothing', async (surface, $, on) => {
-  const world = stage(on, ACTIVE_PEERS)
+  const world = stage(on, MIXED_PEERS)
   await begin($)
 
   const ui = await mountFooter($, surface)
@@ -539,7 +582,7 @@ for (const surface of SURFACES) {
   })
 
   test(`with the Monitor off there is no button, no registry write and no read [${surface}]`, { plugins: [NEIGHBOR_UNDER], options: { enableMonitor: false } }, async ($, on) => {
-    const world = stage(on, ACTIVE_PEERS)
+    const world = stage(on, MIXED_PEERS)
     await begin($)
     await run($, 'as', 'worker')
 
@@ -550,16 +593,16 @@ for (const surface of SURFACES) {
     expect(await ui.drawn()).toEqual(NEIGHBOR_TREE)
     expect(await ui.find({ key: 'open-panel-footer' })).toBeUndefined()
     expect(world.keyReads).toBe(0)
-    expect([...world.store.keys()].filter(key => key.startsWith('sess:')).length).toBe(Object.keys(ACTIVE_PEERS).length)
+    expect([...world.store.keys()].filter(key => key.startsWith('sess:')).length).toBe(Object.keys(MIXED_PEERS).length)
     await ui.unmount()
   })
 }
 
-eachSurface('pressing the footer button opens the panel on tab 1 as /agentes does', async (surface, $, on) => {
+eachSurface('pressing the footer button opens the panel on tab 1 as /agent-panel does', async (surface, $, on) => {
   const world = stage(on)
   await begin($)
   await run($, 'as', 'worker')
-  await run($, 'agentes', 'sessoes')
+  await run($, 'agent-panel', 'sessions')
 
   const ui = await mountFooter($, surface)
 

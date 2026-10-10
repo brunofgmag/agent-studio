@@ -2,14 +2,14 @@
   "name": "agent-studio-local",
   "owner": { "name": "Bruno" },
   "metadata": {
-    "description": "Marketplace local do agent-studio",
+    "description": "Local marketplace for agent-studio",
     "version": "0.1.0"
   },
   "plugins": [
     {
       "name": "agent-studio",
       "source": "./",
-      "description": "Sessões como agente (/as) e painel de agentes",
+      "description": "Run a session as an agent (/as) and watch agents and sessions in a panel",
       "version": "0.1.0",
       "author": { "name": "Bruno" }
     }

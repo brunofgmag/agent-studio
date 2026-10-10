@@ -324,14 +324,14 @@ test('an entry 61 seconds without a heartbeat reads as inactive and stays in the
   const others = await registry.others()
 
   expect(others.map(({ sessionId, presence }) => [sessionId, presence]).sort()).toEqual([
-    ['edge', 'trabalhando'],
-    ['stale', 'inativa'],
+    ['edge', 'working'],
+    ['stale', 'stale'],
   ])
   expect(w.data.has('sess:stale')).toBe(true)
   expect(w.deletes).toEqual([])
 })
 
-test('working and idle entries read as trabalhando and ociosa, the newest first, own key left out', async () => {
+test('working and idle entries read as working and idle, the newest first, own key left out', async () => {
   const w = world({
     'sess:a': entry({ state: 'working', updatedAt: START - 10_000, agent: 'probe', subagents: [{ type: 'T', task: 'k', status: 'running', tool: null, tokens: 1 }] }),
     'sess:b': entry({ state: 'idle', updatedAt: START - 2000 }),
@@ -340,8 +340,8 @@ test('working and idle entries read as trabalhando and ociosa, the newest first,
   const others = await startedRegistry(w).others()
 
   expect(others.map(({ sessionId, presence }) => [sessionId, presence])).toEqual([
-    ['b', 'ociosa'],
-    ['a', 'trabalhando'],
+    ['b', 'idle'],
+    ['a', 'working'],
   ])
   expect(others[1]).toMatchObject({ agent: 'probe', cwd: 'C:/work/other', subagents: [{ type: 'T', task: 'k', status: 'running', tool: null, tokens: 1 }] })
 })
@@ -380,7 +380,7 @@ test('an entry just under 24 hours is not pruned', async () => {
   w.jump(PRUNE_AFTER_MS - BATCH_MS)
   w.deletes.length = 0
 
-  expect((await registry.others()).map(({ presence }) => presence)).toEqual(['encerrada'])
+  expect((await registry.others()).map(({ presence }) => presence)).toEqual(['ended'])
   expect(w.deletes).toEqual([])
 })
 
@@ -408,10 +408,41 @@ test('the end of the session writes encerrada and stops every timer', async () =
   expect(w.sets.length).toBe(writes)
 })
 
-test('another session reads an ended entry as encerrada even when it is old', async () => {
+test('another session reads an ended entry as ended even when it is old', async () => {
   const w = world({ 'sess:gone': entry({ state: 'ended', updatedAt: START - 3_600_000 }) })
 
-  expect((await startedRegistry(w).others()).map(({ presence }) => presence)).toEqual(['encerrada'])
+  expect((await startedRegistry(w).others()).map(({ presence }) => presence)).toEqual(['ended'])
+})
+
+test('a summary with idleSince publishes it, and one without writes no idleSince key', async () => {
+  const idle = world()
+
+  idle.summary.idleSince = START - 4000
+  startedRegistry(idle)
+  await idle.advance(BATCH_MS)
+
+  expect(idle.sets[0]?.value.idleSince).toBe(START - 4000)
+  const busy = world()
+
+  busy.summary = { ...busy.summary, state: 'working', turnStartedAt: START }
+  startedRegistry(busy)
+  await busy.advance(BATCH_MS)
+
+  expect('idleSince' in (busy.sets[0]?.value ?? {})).toBe(false)
+})
+
+test('a stored idleSince is carried to the other sessions, and an entry stored without one, or with a bad one, is still valid', async () => {
+  const w = world({
+    'sess:idle': entry({ idleSince: START - 9000, updatedAt: START - 1000 }),
+    'sess:old': entry({ updatedAt: START - 2000 }),
+    'sess:odd': { ...entry({ updatedAt: START - 3000 }), idleSince: 'yesterday' },
+  })
+  const others = await startedRegistry(w).others()
+
+  expect(others.map(({ sessionId }) => sessionId)).toEqual(['idle', 'old', 'odd'])
+  expect(others[0]?.idleSince).toBe(START - 9000)
+  expect('idleSince' in (others[1] ?? {})).toBe(false)
+  expect('idleSince' in (others[2] ?? {})).toBe(false)
 })
 
 test('a stored title is carried to the other sessions, and an entry stored without one is still valid', async () => {

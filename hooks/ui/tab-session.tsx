@@ -1,7 +1,7 @@
 import type { RenderElement } from 'claude-code'
 
 import type { CatalogView, Exchange, SubagentLine } from '../../types'
-import * as messages from '../messages'
+import type { Messages, SubagentGroup } from '../messages'
 import { drawMessageField } from './message-field'
 import type { PaneElements } from './pane'
 import { drawActionRow, drawNote, drawPanel, drawPressableRow } from './row'
@@ -32,7 +32,7 @@ const INDENT = 2
 
 const OFF = 'off'
 
-const optionsOf = (catalog: CatalogView) => [
+const optionsOf = (messages: Messages, catalog: CatalogView) => [
   ...catalog.agents.filter(({ name }) => name !== OFF).map(({ name }) => ({ value: name })),
   { value: OFF, label: messages.OFF_OPTION_LABEL },
 ]
@@ -45,7 +45,12 @@ const selectedOf = (catalog: CatalogView, activeAgent: string | null) => {
   return catalog.agents.some(({ name }) => name === activeAgent) ? activeAgent : undefined
 }
 
-const drawHeader = ({ Box, Text, Select }: PaneElements, view: SessionView, actions: SessionActions) => {
+const drawHeader = (
+  { Box, Text, Select }: PaneElements,
+  messages: Messages,
+  view: SessionView,
+  actions: SessionActions,
+) => {
   const title = <Text bold>{messages.sessionHeader(view.agentStatus)}</Text>
   const { catalog } = view
 
@@ -68,7 +73,7 @@ const drawHeader = ({ Box, Text, Select }: PaneElements, view: SessionView, acti
       <Select
         key="switch-agent"
         label={messages.SWITCH_LABEL}
-        options={optionsOf(catalog)}
+        options={optionsOf(messages, catalog)}
         value={selectedOf(catalog, view.activeAgent)}
         onSelect={name => actions.use(name)}
       />
@@ -76,7 +81,13 @@ const drawHeader = ({ Box, Text, Select }: PaneElements, view: SessionView, acti
   )
 }
 
-const drawLine = (elements: PaneElements, line: SubagentLine, now: number, actions: SessionActions) => {
+const drawLine = (
+  elements: PaneElements,
+  messages: Messages,
+  line: SubagentLine,
+  now: number,
+  actions: SessionActions,
+) => {
   const { Box } = elements
 
   return (
@@ -91,7 +102,8 @@ const drawLine = (elements: PaneElements, line: SubagentLine, now: number, actio
 
 const drawGroup = (
   elements: PaneElements,
-  group: messages.SubagentGroup,
+  messages: Messages,
+  group: SubagentGroup,
   index: number,
   now: number,
   actions: SessionActions,
@@ -101,12 +113,12 @@ const drawGroup = (
   return (
     <Box flexDirection="column" marginTop={index === 0 ? 0 : 1}>
       <Text dimColor>{group.heading}</Text>
-      {group.lines.map(line => drawLine(elements, line, now, actions))}
+      {group.lines.map(line => drawLine(elements, messages, line, now, actions))}
     </Box>
   )
 }
 
-const drawSummary = ({ Box, Text }: PaneElements, lines: readonly SubagentLine[]) => (
+const drawSummary = ({ Box, Text }: PaneElements, messages: Messages, lines: readonly SubagentLine[]) => (
   <Box marginTop={1}>
     <Text dimColor wrap="truncate">
       {messages.subagentSummary(lines)}
@@ -114,18 +126,23 @@ const drawSummary = ({ Box, Text }: PaneElements, lines: readonly SubagentLine[]
   </Box>
 )
 
-const drawList = (elements: PaneElements, view: SessionView, actions: SessionActions): RenderElement => {
+const drawList = (
+  elements: PaneElements,
+  messages: Messages,
+  view: SessionView,
+  actions: SessionActions,
+): RenderElement => {
   const { Box, Text } = elements
 
   return (
     <Box flexDirection="column">
-      {drawHeader(elements, view, actions)}
-      {view.lines.length === 0 ? null : drawSummary(elements, view.lines)}
+      {drawHeader(elements, messages, view, actions)}
+      {view.lines.length === 0 ? null : drawSummary(elements, messages, view.lines)}
       <Box flexDirection="column" marginTop={1}>
         {view.lines.length === 0 ? (
           <Text>{messages.noSubagents}</Text>
         ) : (
-          messages.subagentGroups(view.lines).map((group, index) => drawGroup(elements, group, index, view.now, actions))
+          messages.subagentGroups(view.lines).map((group, index) => drawGroup(elements, messages, group, index, view.now, actions))
         )}
       </Box>
       <Box marginTop={1}>
@@ -143,25 +160,37 @@ const conversationOf = (exchanges: readonly Exchange[]): Conversation => {
   return { earlier: exchanges.slice(0, Math.max(at, 0)), latest: exchanges[at], after: exchanges.slice(at + 1) }
 }
 
-const drawActions = ({ Box, Button }: PaneElements, line: SubagentLine, actions: SessionActions) => (
+const drawActions = (
+  { Box, Button }: PaneElements,
+  messages: Messages,
+  line: SubagentLine,
+  actions: SessionActions,
+) => (
   <Box flexDirection="row" gap={1}>
     <Button key="back" label={messages.BACK_LABEL} onPress={actions.back} />
     {line.status === 'running' ? <Button key="stop" label={messages.STOP_LABEL} onPress={() => actions.stop(line)} /> : null}
   </Box>
 )
 
-const drawIdentity = (elements: PaneElements, line: SubagentLine, now: number) => {
+const drawIdentity = (elements: PaneElements, messages: Messages, line: SubagentLine, now: number) => {
   const { Box } = elements
 
   return (
     <Box flexDirection="column" marginTop={1}>
       {drawActionRow(elements, messages.subagentRow(line, now))}
       {line.model === null ? null : drawNote(elements, line.model)}
+      {line.cachedTokens > 0 ? drawNote(elements, messages.tokensWithCache(line)) : null}
     </Box>
   )
 }
 
-const drawPrompt = (elements: PaneElements, line: SubagentLine, isOpen: boolean, actions: SessionActions) => {
+const drawPrompt = (
+  elements: PaneElements,
+  messages: Messages,
+  line: SubagentLine,
+  isOpen: boolean,
+  actions: SessionActions,
+) => {
   const { Box, Text, Button, Markdown } = elements
 
   if (line.prompt === '') {
@@ -188,31 +217,39 @@ const drawPrompt = (elements: PaneElements, line: SubagentLine, isOpen: boolean,
       {drawPanel(
         elements,
         isOpen ? <Markdown key="prompt" text={line.prompt} /> : <Text dimColor>{messages.promptPreview(line.prompt)}</Text>,
+        1,
       )}
     </Box>
   )
 }
 
-const drawExchange = (elements: PaneElements, exchange: Exchange) => {
+const drawExchange = (elements: PaneElements, messages: Messages, exchange: Exchange, marginTop = 0) => {
   const { Text, Markdown } = elements
 
   return exchange.kind === 'answer' ? (
-    drawPanel(elements, <Markdown text={exchange.text} />)
+    drawPanel(elements, <Markdown text={exchange.text} />, marginTop)
   ) : (
     <Text dimColor>{messages.youSaid(exchange.text)}</Text>
   )
 }
 
-const drawLatest = (elements: PaneElements, latest: Exchange | undefined) => {
+const drawLatest = (elements: PaneElements, messages: Messages, latest: Exchange | undefined, marginTop: number) => {
   const { Text, Markdown } = elements
 
   return drawPanel(
     elements,
     latest === undefined ? <Text dimColor>{messages.noAnswerYet}</Text> : <Markdown key="answer" text={latest.text} />,
+    marginTop,
   )
 }
 
-const drawConversation = (elements: PaneElements, line: SubagentLine, areEarlierOpen: boolean, actions: SessionActions) => {
+const drawConversation = (
+  elements: PaneElements,
+  messages: Messages,
+  line: SubagentLine,
+  areEarlierOpen: boolean,
+  actions: SessionActions,
+) => {
   const { Box, Text, Button } = elements
   const { earlier, latest, after } = conversationOf(line.exchanges)
 
@@ -222,26 +259,41 @@ const drawConversation = (elements: PaneElements, line: SubagentLine, areEarlier
       {earlier.length === 0 ? null : (
         <Button key="toggle-earlier" plain label={messages.earlierLabel(earlier)} onPress={actions.toggleEarlier} />
       )}
-      {areEarlierOpen ? earlier.map(exchange => drawExchange(elements, exchange)) : null}
-      {drawLatest(elements, latest)}
-      {after.map(exchange => drawExchange(elements, exchange))}
+      {areEarlierOpen
+        ? earlier.map((exchange, at) => drawExchange(elements, messages, exchange, at === 0 ? 1 : 0))
+        : null}
+      {drawLatest(elements, messages, latest, earlier.length > 0 && !areEarlierOpen ? 1 : 0)}
+      {after.map(exchange => drawExchange(elements, messages, exchange))}
     </Box>
   )
 }
 
-const drawDetail = (elements: PaneElements, view: SessionView, line: SubagentLine, actions: SessionActions): RenderElement => {
+const drawDetail = (
+  elements: PaneElements,
+  messages: Messages,
+  view: SessionView,
+  line: SubagentLine,
+  actions: SessionActions,
+): RenderElement => {
   const { Box } = elements
 
   return (
     <Box flexDirection="column">
-      {drawActions(elements, line, actions)}
-      {drawIdentity(elements, line, view.now)}
-      {drawPrompt(elements, line, view.isPromptOpen, actions)}
-      {drawConversation(elements, line, view.areEarlierOpen, actions)}
-      {drawMessageField(elements, `message-${view.sentCount}`, messages.MESSAGE_PLACEHOLDER_SUBAGENT, text => actions.send(line, text))}
+      {drawActions(elements, messages, line, actions)}
+      {drawIdentity(elements, messages, line, view.now)}
+      {drawPrompt(elements, messages, line, view.isPromptOpen, actions)}
+      {drawConversation(elements, messages, line, view.areEarlierOpen, actions)}
+      {drawMessageField(elements, messages, `message-${view.sentCount}`, messages.MESSAGE_PLACEHOLDER_SUBAGENT, text => actions.send(line, text))}
     </Box>
   )
 }
 
-export const drawSession = (elements: PaneElements, view: SessionView, actions: SessionActions): RenderElement =>
-  view.open === null ? drawList(elements, view, actions) : drawDetail(elements, view, view.open, actions)
+export const drawSession = (
+  elements: PaneElements,
+  messages: Messages,
+  view: SessionView,
+  actions: SessionActions,
+): RenderElement =>
+  view.open === null
+    ? drawList(elements, messages, view, actions)
+    : drawDetail(elements, messages, view, view.open, actions)

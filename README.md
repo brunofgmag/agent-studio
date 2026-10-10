@@ -1,12 +1,14 @@
 # agent-studio
 
-Plugin de mods para o Claude Code, feito para o Code tab do Claude Desktop no Windows. Ele faz duas coisas. O Launcher põe a sessão para atuar como um agente de `.claude/agents`, o que no terminal seria `claude --agent architect`. O Monitor mostra num painel os subagentes da sessão e as outras sessões abertas na máquina.
+English | [Português](README.pt-BR.md)
 
-Precisa do Claude Code 2.1.286 ou mais novo no Desktop. A versão aparece em `/status`.
+A Claude Code mods plugin, built for the Code tab of Claude Desktop on Windows. It does two things. The Launcher makes the session act as an agent from `.claude/agents`, which in a terminal would be `claude --agent architect`. The Monitor shows, in a panel, the session's subagents and the other sessions open on the machine.
 
-## Instalação
+It needs Claude Code 2.1.286 or newer in the Desktop app. The version shows in `/status`.
 
-A instalação se faz num terminal, porque `/plugin install` não funciona dentro de uma sessão do Code tab.
+## Installation
+
+Install from a terminal, because `/plugin install` does not work inside a Code tab session.
 
 ```bash
 claude plugin marketplace add C:/Users/bruno/Projetos/agent-studio
@@ -16,76 +18,81 @@ claude plugin marketplace add C:/Users/bruno/Projetos/agent-studio
 claude plugin install agent-studio@agent-studio-local
 ```
 
-Sessões abertas antes da instalação só carregam o plugin depois de reiniciar o app.
+Sessions opened before the install only load the plugin after you restart the app.
 
 ## Launcher: `/as`
 
-| Comando | O que faz |
+| Command | What it does |
 | --- | --- |
-| `/as architect` | Ativa o agente `architect` na sessão |
-| `/as` | Abre o painel na aba Agentes; sem tela, lista os agentes em texto |
-| `/as ?` | Mostra o agente ativo, com modelo, effort e ferramentas |
-| `/as off` | Volta ao comportamento padrão |
-| `/as --reload` | Lê de novo as pastas de agentes |
+| `/as architect` | Activates the `architect` agent in the session |
+| `/as` | Opens the panel on the Agents tab; with no screen, lists the agents as text |
+| `/as ?` | Shows the active agent, with its model, effort and tools |
+| `/as off` | Goes back to the default behavior |
+| `/as --reload` | Reads the agent folders again |
 
-Os agentes vêm de `.claude/agents` do projeto, da pasta de trabalho até a raiz do repositório, e de `~/.claude/agents`. Com dois agentes de mesmo `name`, vale o do projeto.
+Agents come from the project's `.claude/agents`, from the working folder up to the repository root, and from `~/.claude/agents`. When two agents share a `name`, the project one wins.
 
-Do arquivo do agente o plugin aplica o corpo (como system prompt), `model`, `effort`, `tools`, `disallowedTools` e `initialPrompt`. As restrições valem só no loop principal; os subagentes seguem as regras deles. Uma entrada `Agent(researcher, implementer)` em `tools` limita os tipos de subagente que a sessão dispara. O `initialPrompt` é enviado uma vez, logo depois de um `/as nome` que você digitou ou do botão Usar nesta sessão, e nunca quando o agente é restaurado.
+From the agent file the plugin applies the body (as the system prompt), `model`, `effort`, `tools`, `disallowedTools` and `initialPrompt`. The restrictions apply to the main loop only; subagents follow their own rules. An `Agent(researcher, implementer)` entry in `tools` limits the subagent types the session can start. The `initialPrompt` is sent once, right after an `/as name` you typed or after the Use button in this session, and never when the agent is restored.
 
-Os campos `mcpServers`, `hooks`, `permissionMode`, `memory`, `skills` e `maxTurns` são lidos e não aplicados. O `/as` avisa quando o agente tem algum deles.
+The fields `mcpServers`, `hooks`, `permissionMode`, `memory`, `skills` and `maxTurns` are read and not applied. `/as` warns when the agent has any of them.
 
-O agente escolhido fica guardado por sessão e volta depois de reabrir o app, de um `/clear` e de uma retomada. Enquanto ele está ativo, a linha de status mostra algo como `@designer · claude-opus-5-5[1m] · xhigh`. Com o Monitor ligado, a linha de status mostra `@designer · 2 subagentes rodando · 1 sessão ativa` e o botão Painel fica ao lado dela.
+The chosen agent is stored per session and comes back after you reopen the app, after a `/clear` and after a resume. While it is active, the status line shows something like `@designer · claude-opus-5-5[1m] · xhigh`. With the Monitor on, the status line shows `@designer · 2 subagents running · 1 session working` and the Panel button sits beside it.
 
-### Agente padrão por projeto
+### Default agent per project
 
-Com `{ "agent": "architect" }` no settings do projeto, uma sessão nova já começa como esse agente. No terminal o próprio Claude Code aplica a chave e a sessão nasce como agente nativo, então o plugin não faz nada. Um `/as off` vale mais que o padrão e continua valendo depois de reabrir o app.
+With `{ "agent": "architect" }` in the project settings, a new session starts as that agent. In a terminal Claude Code itself applies the key and the session is born as a native agent, so the plugin does nothing. An `/as off` outranks the default and still holds after you reopen the app.
 
-### Limites do Launcher
+### Launcher limits
 
-O motor monta o system prompt no primeiro turno da conversa e só o refaz depois de um `/clear` ou de uma compactação. Por isso o `/as` vale por inteiro quando é a primeira coisa da sessão. Com a conversa em curso, modelo, effort e ferramentas trocam na hora, as instruções do agente entram como uma mensagem oculta, e o system prompt só troca no próximo `/clear` ou na próxima compactação. A resposta do comando diz qual dos dois casos aconteceu. Se a troca muda o modelo do loop principal (com `/as nome` ou com `/as off`), a resposta traz também um aviso, porque o cache de prompt da API é por modelo e o próximo turno relê a conversa inteira sem cache.
+The engine builds the system prompt on the first turn of the conversation and only rebuilds it after a `/clear` or a compaction. So `/as` takes full effect when it is the first thing in the session. With a conversation under way, the model, effort and tools change at once, the agent's instructions enter as a hidden message, and the system prompt only changes at the next `/clear` or the next compaction. The command's answer says which of the two cases happened. If the switch changes the main loop's model (with `/as name` or with `/as off`), the answer also carries a warning, because the API prompt cache is per model and the next turn rereads the whole conversation without cache.
 
-Sessão que já nasceu com um agente nativo (`claude --agent`, ou a chave `agent` do settings aplicada pelo Claude Code) fica fora do Launcher. Nela o `/as` responde que a sessão já é aquele agente.
+A session born with a native agent (`claude --agent`, or the `agent` settings key applied by Claude Code) stays outside the Launcher. In it, `/as` answers that the session already is that agent.
 
-Modelo declarado por apelido (`model: opus`) passa pela tabela da opção Apelidos de modelo. Apelido fora da tabela mantém o modelo da sessão, e o `/as` avisa.
+A model declared by alias (`model: opus`) goes through the table in the Model aliases option. An alias missing from the table keeps the session's model, and `/as` warns.
 
-## Monitor: `/agentes`
+## Monitor: `/agent-panel`
 
-`/agentes` abre o painel Agentes. Onde não há tela para o painel, o comando responde a mesma informação em texto, e `/agentes sessoes` faz o mesmo para a lista de sessões.
+`/agent-panel` opens the Agents panel. Where there is no screen for the panel, the command answers the same information as text, and `/agent-panel sessions` does the same for the list of sessions.
 
-O painel tem três abas, que trocam com `1`, `2` e `3`.
+The panel has three tabs, switched with `1`, `2` and `3`.
 
-Esta sessão mostra os subagentes da sessão em árvore, cada linha com status, tipo, tarefa, ferramenta em uso, duração e tokens. A lista começa com uma linha de resumo, com a contagem por status e o total de tokens, e se divide em Em andamento e Terminados. Enter numa linha abre o detalhe. No topo ficam o Voltar e, enquanto o subagente roda, o Parar. Abaixo vêm o cabeçalho com o modelo, o prompt dado, a conversa e um campo para mandar mensagem ao subagente. O prompt aparece recolhido, e `mostrar tudo` abre o texto inteiro. A conversa mostra a última resposta, e as anteriores ficam atrás de `Respostas anteriores`. As mensagens que você manda por esse campo aparecem como `Você: ...` entre as respostas. O painel guarda as últimas 20 trocas de cada subagente, e só até a sessão fechar. O cabeçalho da aba tem um seletor para trocar de agente.
+This session shows the session's subagents as a tree, each row with status, type, task, tool in use, duration and tokens. The token count leaves out cache reads, and the detail shows the total with them. The list starts with a summary line, with the count per status and the token total, and splits into In progress and Finished. Enter on a row opens the detail. At the top are Back and, while the subagent runs, Stop. Below come the header with the model, the prompt given, the conversation and a field to send the subagent a message. The prompt shows collapsed, and `show all` opens the full text. The conversation shows the last answer, and the earlier ones sit behind `Earlier answers`. Messages you send through that field show as `You: ...` among the answers. The panel keeps the last 20 exchanges of each subagent, and only until the session closes. The tab header has a selector to switch agents.
 
-Outras sessões lista as sessões da máquina que rodam o plugin: pasta, agente, estado, número de subagentes e última atividade. O detalhe de uma sessão mostra a última resposta dela, os subagentes só para leitura, um campo de mensagem e o botão Status, que pede à outra sessão uma linha sobre o que ela está fazendo. Uma sessão sem sinal há 60 segundos aparece como inativa, e uma entrada parada há 24 horas é apagada.
+Other sessions lists the sessions on the machine that run the plugin: folder, agent, state, number of subagents and a time that depends on the state. For a session working, the time is how long its current turn has run, as minutes and seconds. For an idle session, it is how long ago the session went idle: when its last turn ended, or when the session started, was cleared, resumed or forked. Sessions that stopped publishing (inactive) and ended ones show how long ago they last signaled. A session's detail shows its last answer, its subagents as read-only, a message field and the Status button, which asks the other session for one line about what it is doing. A session with no signal for 60 seconds shows as inactive, and an entry idle for 24 hours is deleted.
 
-Agentes lista o catálogo. O botão Usar, em cada linha, faz o que `/as nome` faz. Quando a conversa já começou e o agente troca o modelo, o primeiro clique mostra o aviso na linha e o botão vira Confirmar; o segundo clique ativa o agente.
+Agents lists the catalog. The Use button on each row does what `/as name` does. When the conversation has already started and the agent changes the model, the first click shows the warning on the row and the button becomes Confirm; the second click activates the agent.
 
-No rodapé do prompt, ao lado dos modos, o botão Painel abre o painel. Com um agente ativo, subagentes rodando ou outras sessões ativas, a linha de status resume a situação, por exemplo `@designer · 2 subagentes rodando · 1 sessão ativa`.
+At the bottom of the prompt, beside the modes, the Panel button opens the panel. With an active agent, running subagents or other sessions with a turn running, the status line sums up the situation, for example `@designer · 2 subagents running · 1 session working`. The session count includes only sessions in the middle of a turn; idle sessions are not counted.
 
-### Limites do Monitor
+### Monitor limits
 
-Em modo de permissão `auto`, o Claude Code recusa a mensagem que um plugin manda direto a outra sessão ou a um subagente. Nesse caso o painel submete um pedido na conversa para o modelo mandar a mensagem, com o seu texto sem alteração. Nos modos `default` e `acceptEdits` a mensagem vai direto.
+In `auto` permission mode, Claude Code refuses a message that a plugin sends straight to another session or to a subagent. In that case the panel submits a request in the conversation for the model to send the message, with your text unchanged. In the `default` and `acceptEdits` modes the message goes straight through.
 
-Só aparecem sessões locais que carregam o plugin. Sessões na nuvem, no WSL e no VS Code ficam de fora.
+Only local sessions that load the plugin appear. Cloud, WSL and VS Code sessions are left out.
 
-Cada sessão publica um resumo no armazenamento do plugin, em `~/.claude/plugins/store/`. Com a opção Compartilhar respostas ligada, o resumo inclui até 300 caracteres da última resposta, que qualquer outra sessão da máquina consegue ler.
+Each session publishes a summary in the plugin's storage, in `~/.claude/plugins/store/`. With the Share answers option on, the summary includes up to 300 characters of the last answer, which any other session on the machine can read.
 
-## Opções
+## Options
 
-| Opção | Padrão | Efeito |
+| Option | Default | Effect |
 | --- | --- | --- |
-| Launcher (`enableLauncher`) | ligado | Registra o `/as` |
-| Monitor (`enableMonitor`) | ligado | Registra o `/agentes`, o painel e o botão do rodapé |
-| Compartilhar respostas (`shareAnswers`) | ligado | Publica o trecho da última resposta para as outras sessões |
-| Apelidos de modelo (`modelAliases`) | `opus=claude-opus-5-5,sonnet=claude-sonnet-5-5,haiku=claude-haiku-5-5` | Traduz apelido em id de modelo |
+| Launcher (`enableLauncher`) | on | Registers `/as` |
+| Monitor (`enableMonitor`) | on | Registers `/agent-panel`, the panel and the footer button |
+| Share answers (`shareAnswers`) | on | Publishes an excerpt of the last answer for the other sessions |
+| Model aliases (`modelAliases`) | `opus=claude-opus-5-5,sonnet=claude-sonnet-5-5,haiku=claude-haiku-5-5` | Maps an alias to a model id |
+| Language (`language`) | `en` | Language of the messages: `en` or `pt-BR` |
 
-Com Launcher e Monitor desligados o plugin não registra nenhum hook nem comando.
+With the Launcher and the Monitor both off, the plugin registers no hook and no command.
 
-## Como desligar
+## Language
 
-Desative o plugin em `/plugin`, num terminal. Para uma sessão só, abra o Claude Code com `--safe-mode`.
+The default is English. To see the messages, the panel and the command answers in Brazilian Portuguese, set the `language` option to `pt-BR`. The command names (`/as`, `/agent-panel`, `sessions`) are the same in both languages. An unknown value falls back to English. The option titles in this list stay in English, because `plugin.json` does not change with the language.
 
-## Desenvolvimento
+## How to turn it off
+
+Disable the plugin in `/plugin`, in a terminal. For a single session, open Claude Code with `--safe-mode`.
+
+## Development
 
 ```bash
 claude plugin test C:/Users/bruno/Projetos/agent-studio
@@ -99,4 +106,4 @@ npx --prefix C:/Users/bruno/Projetos/agent-studio/dev --no-install tsc -p C:/Use
 claude plugin validate --strict C:/Users/bruno/Projetos/agent-studio
 ```
 
-Os testes usam o kit do motor (`claude-code/testing`) e não precisam de modelo nem de tela. A checagem de tipos depende de `.claude-plugin/types/`, que o Claude Code grava quando uma sessão interativa carrega o plugin.
+The tests use the engine kit (`claude-code/testing`) and need neither a model nor a screen. The type check depends on `.claude-plugin/types/`, which Claude Code writes when an interactive session loads the plugin.

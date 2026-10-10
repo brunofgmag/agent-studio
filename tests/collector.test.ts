@@ -7,6 +7,7 @@ import {
   EXCHANGE_LIMIT,
   LINE_LIMIT,
   type SpawnFacts,
+  cachedOf,
   createCollector,
   tokensOf,
 } from '../hooks/monitor/collector'
@@ -65,6 +66,7 @@ test('birth, tool, step and end make one line with type, task, model, tool, summ
     endedAt: null,
     durationMs: null,
     tokens: 0,
+    cachedTokens: 0,
   })
 
   collector.toolFinished('a1', 'Read')
@@ -75,7 +77,8 @@ test('birth, tool, step and end make one line with type, task, model, tool, summ
   expect(lineOf(collector, 'a1')).toMatchObject({
     status: 'completed',
     tool: null,
-    tokens: 137,
+    tokens: 37,
+    cachedTokens: 100,
     startedAt: 1000,
     endedAt: 3000,
     durationMs: 1800,
@@ -84,8 +87,71 @@ test('birth, tool, step and end make one line with type, task, model, tool, summ
   expect(collector.runningCount()).toBe(0)
 })
 
-test('tokensOf adds the four counters', () => {
-  expect(tokensOf(usage(1, 2, 4, 8))).toBe(15)
+test('tokensOf adds input, output and cache creation, and leaves the cache reads out', () => {
+  expect(tokensOf(usage(1, 2, 4, 8))).toBe(11)
+})
+
+test('cachedOf is the cache reads alone', () => {
+  expect(cachedOf(usage(1, 2, 4, 8))).toBe(4)
+})
+
+test('each step adds input, output and creation to tokens and the reads to cachedTokens', () => {
+  const collector = createCollector()
+
+  bear(collector, 'a1', 1000)
+  collector.stepUsed('a1', usage(10, 5, 100, 20))
+
+  expect(lineOf(collector, 'a1')).toMatchObject({ tokens: 35, cachedTokens: 100 })
+
+  collector.stepUsed('a1', usage(1, 2, 300, 4))
+
+  expect(lineOf(collector, 'a1')).toMatchObject({ tokens: 42, cachedTokens: 400 })
+})
+
+test('a step without usage adds nothing to either count', () => {
+  const collector = createCollector()
+
+  bear(collector, 'a1', 1000)
+  collector.stepUsed('a1', usage(10, 0, 50))
+  collector.stepUsed('a1', null)
+  collector.stepUsed('a1', undefined)
+
+  expect(lineOf(collector, 'a1')).toMatchObject({ tokens: 10, cachedTokens: 50 })
+})
+
+test('an end with usage replaces the run sums of both counts', () => {
+  const collector = createCollector()
+
+  bear(collector, 'a1', 1000)
+  collector.stepUsed('a1', usage(10, 0, 500))
+  collector.stepUsed('a1', usage(20, 0, 700))
+  complete(collector, 'a1', 2000, { usage: usage(100, 50, 9000, 25) })
+
+  expect(lineOf(collector, 'a1')).toMatchObject({ tokens: 175, cachedTokens: 9000 })
+})
+
+test('an end with no usage keeps the step sums of both counts', () => {
+  const collector = createCollector()
+
+  bear(collector, 'a1', 1000)
+  collector.stepUsed('a1', usage(10, 5, 60, 1))
+  complete(collector, 'a1', 2000, { reason: 'error' })
+
+  expect(lineOf(collector, 'a1')).toMatchObject({ tokens: 16, cachedTokens: 60 })
+})
+
+test('a resumed subagent keeps the earlier runs in both counts', () => {
+  const collector = createCollector()
+
+  bear(collector, 'a1', 1000)
+  complete(collector, 'a1', 2000, { usage: usage(40, 0, 400) })
+  collector.stepUsed('a1', usage(5, 0, 50))
+
+  expect(lineOf(collector, 'a1')).toMatchObject({ status: 'running', tokens: 45, cachedTokens: 450 })
+
+  complete(collector, 'a1', 4000, { usage: usage(30, 0, 300) })
+
+  expect(lineOf(collector, 'a1')).toMatchObject({ status: 'completed', tokens: 70, cachedTokens: 700 })
 })
 
 test('a nested subagent sits right under its parent with one more level, whatever the birth order', () => {
@@ -263,6 +329,7 @@ test('a subagent only the official list knows appears with what the list gives a
       status: 'running',
       tool: null,
       tokens: 0,
+      cachedTokens: 0,
       startedAt: 5000,
       endedAt: null,
       durationMs: null,

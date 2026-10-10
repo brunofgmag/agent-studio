@@ -1,8 +1,9 @@
 import type { AgentInfo, On, TurnUsage } from 'claude-code'
-import { type Engine, expect, mock, test } from 'claude-code/testing'
+import { type Engine, expect, mock } from 'claude-code/testing'
 
 import { register } from '../hooks/register'
 import type { SessionEntry } from '../types'
+import { test } from './in-portuguese'
 
 type Setup = {
   store?: Readonly<Record<string, unknown>>
@@ -41,12 +42,12 @@ const AGENTS = [
   { file: `${PROJECT}/.claude/agents/restricted.md`, text: '---\nname: restricted\ndescription: restricted description\ntools: Read\n---\nYou are restricted.\n' },
 ]
 
-const usage = (input: number, output = 0): TurnUsage => ({
+const usage = (input: number, output = 0, read = 0, created = 0): TurnUsage => ({
   model: SESSION_MODEL,
   input_tokens: input,
   output_tokens: output,
-  cache_read_input_tokens: 0,
-  cache_creation_input_tokens: 0,
+  cache_read_input_tokens: read,
+  cache_creation_input_tokens: created,
 })
 
 const entry = (over: Partial<SessionEntry> = {}): SessionEntry => ({
@@ -199,7 +200,7 @@ const run = async ($: Engine, command: string, args = '') =>
     })
   ).text ?? ''
 
-const agentes = ($: Engine, args = '') => run($, 'agentes', args)
+const agentPanel = ($: Engine, args = '') => run($, 'agent-panel', args)
 
 const spawn = async ($: Engine, over: { description?: string; subagentType?: string; parentAgentId?: string } = {}) =>
   $.agent.spawn({
@@ -241,7 +242,7 @@ const NONE = 'Nenhum subagente nesta sessão.'
 
 const ownKey = `sess:${SESSION}`
 
-test('spawn, tool, step and turn.complete become one line of the /agentes tree', async ($, on) => {
+test('spawn, tool, step and turn.complete become one line of the /agent-panel tree', async ($, on) => {
   const world = stage(on)
   await begin($)
 
@@ -249,16 +250,33 @@ test('spawn, tool, step and turn.complete become one line of the /agentes tree',
   world.usage = usage(1200, 300)
   await step($, 'sub-1')
 
-  expect(await agentes($)).toBe('● rodando  general-purpose  read the logs  —  0:00  1.5k')
+  expect(await agentPanel($)).toBe('● rodando  general-purpose  read the logs  —  0:00  1.5k')
 
   await world.clock.advance(3000)
 
-  expect(await agentes($)).toBe('● rodando  general-purpose  read the logs  —  0:03  1.5k')
+  expect(await agentPanel($)).toBe('● rodando  general-purpose  read the logs  —  0:03  1.5k')
 
   world.usage = null
   await complete($, { agentId: 'sub-1', durationMs: 2400, usage: usage(2000, 500) })
 
-  expect(await agentes($)).toBe('✓ concluído  general-purpose  read the logs  —  0:02  2.5k')
+  expect(await agentPanel($)).toBe('✓ concluído  general-purpose  read the logs  —  0:02  2.5k')
+})
+
+test('the text line and the published entry count input, output and creation, and leave the cache reads out', async ($, on) => {
+  const world = stage(on)
+  await begin($)
+
+  await spawn($)
+  world.usage = usage(1000, 200, 40_000, 300)
+  await step($, 'sub-1')
+  await world.clock.advance(1000)
+
+  expect(await agentPanel($)).toBe('● rodando  general-purpose  read the logs  —  0:01  1.5k')
+
+  const published = (world.store.get(ownKey) as SessionEntry).subagents
+
+  expect(published).toEqual([{ type: 'general-purpose', task: 'read the logs', status: 'running', tool: null, tokens: 1500 }])
+  expect('cachedTokens' in (published[0] ?? {})).toBe(false)
 })
 
 test('a tool in flight shows on the line and is cleared when the call ends', async ($, on) => {
@@ -275,12 +293,12 @@ test('a tool in flight shows on the line and is cleared when the call ends', asy
 
   await world.clock.settle()
 
-  expect(await agentes($)).toBe('● rodando  general-purpose  read the logs  Read  0:00  0')
+  expect(await agentPanel($)).toBe('● rodando  general-purpose  read the logs  Read  0:00  0')
 
   release()
   await pending
 
-  expect(await agentes($)).toBe('● rodando  general-purpose  read the logs  —  0:00  0')
+  expect(await agentPanel($)).toBe('● rodando  general-purpose  read the logs  —  0:00  0')
 })
 
 test('the tokens of three subagents add up from their steps and then from the turn.complete totals', async ($, on) => {
@@ -297,13 +315,13 @@ test('the tokens of three subagents add up from their steps and then from the tu
   await step($, 'sub-3')
   await step($, 'sub-3')
 
-  expect((await agentes($)).split('\n').map(line => line.split('  ').at(-1))).toEqual(['1.0k', '1.0k', '2.0k'])
+  expect((await agentPanel($)).split('\n').map(line => line.split('  ').at(-1))).toEqual(['1.0k', '1.0k', '2.0k'])
 
   await complete($, { agentId: 'sub-1', usage: usage(1200) })
   await complete($, { agentId: 'sub-2', usage: usage(900, 100) })
   await complete($, { agentId: 'sub-3', usage: usage(10_000, 8000) })
 
-  expect((await agentes($)).split('\n').map(line => line.split('  ').at(-1))).toEqual(['1.2k', '1.0k', '18k'])
+  expect((await agentPanel($)).split('\n').map(line => line.split('  ').at(-1))).toEqual(['1.2k', '1.0k', '18k'])
 })
 
 test('a token count under a thousand is shown as it is', async ($, on) => {
@@ -314,7 +332,7 @@ test('a token count under a thousand is shown as it is', async ($, on) => {
   world.usage = usage(400, 99)
   await step($, 'sub-1')
 
-  expect((await agentes($)).split('  ').at(-1)).toBe('499')
+  expect((await agentPanel($)).split('  ').at(-1)).toBe('499')
 })
 
 test('a nested subagent is listed under its parent with two spaces of indent', async ($, on) => {
@@ -326,7 +344,7 @@ test('a nested subagent is listed under its parent with two spaces of indent', a
   await spawn($, { description: 'child', parentAgentId: 'sub-1' })
   world.usage = null
 
-  expect((await agentes($)).split('\n')).toEqual([
+  expect((await agentPanel($)).split('\n')).toEqual([
     '● rodando  general-purpose  parent  —  0:00  0',
     '  ● rodando  general-purpose  child  —  0:00  0',
     '● rodando  general-purpose  other root  —  0:00  0',
@@ -342,7 +360,7 @@ test('the main loop makes no line: its tools, steps and turn.complete', async ($
   await step($)
   await complete($)
 
-  expect(await agentes($)).toBe(NONE)
+  expect(await agentPanel($)).toBe(NONE)
 })
 
 test('a spawn the engine denied makes no line', async ($, on) => {
@@ -352,7 +370,7 @@ test('a spawn the engine denied makes no line', async ($, on) => {
   world.denySpawn = true
   await spawn($)
 
-  expect(await agentes($)).toBe(NONE)
+  expect(await agentPanel($)).toBe(NONE)
 })
 
 test('interrupted, failed and refused ends show parado, falhou and concluído', async ($, on) => {
@@ -367,7 +385,7 @@ test('interrupted, failed and refused ends show parado, falhou and concluído', 
   await complete($, { agentId: 'sub-2', reason: 'error' })
   await complete($, { agentId: 'sub-3', reason: 'refusal', refusal: { category: null, explanation: null } })
 
-  expect((await agentes($)).split('\n').map(line => line.split('  ').slice(0, 1).join())).toEqual([
+  expect((await agentPanel($)).split('\n').map(line => line.split('  ').slice(0, 1).join())).toEqual([
     '■ parado',
     '✗ falhou',
     '✓ concluído',
@@ -383,7 +401,7 @@ test('a subagent only the official list knows shows up, and the list status deci
     { id: 'early-2', description: 'was stopped', type: 'Explore', status: 'killed', parentId: 'early-1' },
   ]
 
-  expect((await agentes($)).split('\n')).toEqual([
+  expect((await agentPanel($)).split('\n')).toEqual([
     '● rodando  Explore  born before  —  0:00  0',
     '  ■ parado  Explore  was stopped  —  0:00  0',
   ])
@@ -396,7 +414,7 @@ test('the list wins over an end the events gave', async ($, on) => {
   await spawn($)
   world.listed = [{ id: 'sub-1', description: 'read the logs', type: 'general-purpose', status: 'failed' }]
 
-  expect(await agentes($)).toBe('✗ falhou  general-purpose  read the logs  —  0:00  0')
+  expect(await agentPanel($)).toBe('✗ falhou  general-purpose  read the logs  —  0:00  0')
 })
 
 test('a list that cannot be read leaves the tree the events built', async ($, on) => {
@@ -406,7 +424,7 @@ test('a list that cannot be read leaves the tree the events built', async ($, on
   await spawn($)
   world.failList = true
 
-  expect(await agentes($)).toBe('● rodando  general-purpose  read the logs  —  0:00  0')
+  expect(await agentPanel($)).toBe('● rodando  general-purpose  read the logs  —  0:00  0')
   expect(world.listCalls).toBe(1)
 })
 
@@ -416,7 +434,7 @@ test('the active agent heads the tree, and the line names its model and effort',
   await run($, 'as', 'worker')
   await spawn($)
 
-  expect((await agentes($)).split('\n')[0]).toBe('Agente em vigor: @worker · claude-opus-5-5[1m] · high')
+  expect((await agentPanel($)).split('\n')[0]).toBe('Agente em vigor: @worker · claude-opus-5-5[1m] · high')
 })
 
 test('a session that turns out to be native shows no agent in the header and publishes none', async ($, on) => {
@@ -427,7 +445,7 @@ test('a session that turns out to be native shows no agent in the header and pub
   await spawn($)
   await world.clock.advance(1000)
 
-  expect(await agentes($)).toBe('● rodando  general-purpose  read the logs  —  0:01  0')
+  expect(await agentPanel($)).toBe('● rodando  general-purpose  read the logs  —  0:01  0')
   expect(world.store.get(ownKey)).toMatchObject({ agent: null, model: SESSION_MODEL })
 })
 
@@ -446,7 +464,7 @@ test('a native session restored beside a saved /as agent shows and publishes no 
   await spawn($)
   await world.clock.advance(1000)
 
-  expect(await agentes($)).toBe('● rodando  general-purpose  read the logs  —  0:01  0')
+  expect(await agentPanel($)).toBe('● rodando  general-purpose  read the logs  —  0:01  0')
   expect(world.store.get(ownKey)).toMatchObject({ agent: null, model: SESSION_MODEL })
 })
 
@@ -458,12 +476,12 @@ test('a spawn the Launcher denies makes no line, and one it lets through does', 
   await spawn($, { subagentType: 'implementer' })
 
   expect(world.spawned).toEqual([])
-  expect(await agentes($)).toBe(NONE)
+  expect(await agentPanel($)).toBe(NONE)
 
   await spawn($, { subagentType: 'researcher' })
 
   expect(world.spawned).toEqual(['researcher'])
-  expect((await agentes($)).split('\n')[1]).toContain('researcher')
+  expect((await agentPanel($)).split('\n')[1]).toContain('researcher')
 })
 
 test('a subagent tool the Launcher guard would refuse for the main loop passes and shows on the tree', async ($, on) => {
@@ -494,7 +512,7 @@ test('a clear forgets the subagents of the old conversation', async ($, on) => {
   world.sessionId = 'session-2'
   await $.classic.SessionStart({ source: 'clear' })
 
-  expect(await agentes($)).toBe(NONE)
+  expect(await agentPanel($)).toBe(NONE)
 })
 
 test('a compaction keeps the subagents', async ($, on) => {
@@ -503,7 +521,7 @@ test('a compaction keeps the subagents', async ($, on) => {
   await spawn($)
   await $.classic.SessionStart({ source: 'compact' })
 
-  expect(await agentes($)).not.toBe(NONE)
+  expect(await agentPanel($)).not.toBe(NONE)
 })
 
 test('a resume and a fork also change the key and forget the subagents', async ($, on) => {
@@ -515,7 +533,7 @@ test('a resume and a fork also change the key and forget the subagents', async (
   await $.classic.SessionStart({ source: 'resume' })
   await world.clock.advance(1000)
 
-  expect(await agentes($)).toBe(NONE)
+  expect(await agentPanel($)).toBe(NONE)
   expect(world.store.has('sess:resumed')).toBe(true)
   expect(world.store.has(ownKey)).toBe(false)
 
@@ -527,22 +545,23 @@ test('a resume and a fork also change the key and forget the subagents', async (
   expect(world.store.has('sess:resumed')).toBe(false)
 })
 
-test('/agentes with an argument it does not know says how to use it', async ($, on) => {
+test('/agent-panel with an argument it does not know says how to use it', async ($, on) => {
   stage(on)
   await begin($)
 
-  expect(await agentes($, 'foo')).toBe(
-    'Uso: /agentes para os subagentes desta sessão, /agentes sessoes para as outras sessões.',
+  expect(await agentPanel($, 'foo')).toBe(
+    'Uso: /agent-panel para os subagentes desta sessão, /agent-panel sessions para as outras sessões.',
   )
 })
 
-test('/agentes sessoes lists the other sessions from the store and leaves this one out', async ($, on) => {
+test('/agent-panel sessions lists the other sessions from the store and leaves this one out', async ($, on) => {
   const world = stage(on, {
     store: {
       'sess:busy': entry({
         cwd: 'C:/work/api',
         agent: 'architect',
         state: 'working',
+        turnStartedAt: NOW - 83_000,
         updatedAt: NOW - 5000,
         subagents: [
           { type: 'Explore', task: 'a', status: 'running', tool: null, tokens: 1 },
@@ -563,23 +582,23 @@ test('/agentes sessoes lists the other sessions from the store and leaves this o
 
   await begin($)
 
-  expect((await agentes($, 'sessoes')).split('\n')).toEqual([
+  expect((await agentPanel($, 'sessions')).split('\n')).toEqual([
     'Outras sessões (3):',
-    '  C:/work/api  @architect  trabalhando  2 subagentes  há 5 s',
+    '  C:/work/api  @architect  trabalhando  2 subagentes  1:23',
     '  C:/work/old  sem agente  inativa  0 subagentes  há 1 min',
     '  C:/work/done  sem agente  encerrada  1 subagente  há 2 min',
   ])
   expect(world.deletes).toEqual([])
 })
 
-test('/agentes sessoes with nothing else in the store says so', async ($, on) => {
+test('/agent-panel sessions with nothing else in the store says so', async ($, on) => {
   stage(on)
   await begin($)
 
-  expect(await agentes($, 'sessoes')).toBe('Nenhuma outra sessão registrada.')
+  expect(await agentPanel($, 'sessions')).toBe('Nenhuma outra sessão registrada.')
 })
 
-test('/agentes sessoes prunes an entry 24 hours old and leaves launcher keys alone', async ($, on) => {
+test('/agent-panel sessions prunes an entry 24 hours old and leaves launcher keys alone', async ($, on) => {
   const world = stage(on, {
     store: {
       'sess:ancient': entry({ updatedAt: NOW - 1000 }),
@@ -590,7 +609,7 @@ test('/agentes sessoes prunes an entry 24 hours old and leaves launcher keys alo
   await begin($)
   await world.clock.set(NOW + 24 * 60 * 60 * 1000 + 1)
 
-  expect(await agentes($, 'sessoes')).toBe('Nenhuma outra sessão registrada.')
+  expect(await agentPanel($, 'sessions')).toBe('Nenhuma outra sessão registrada.')
   expect(world.deletes).toEqual(['sess:ancient'])
   expect(world.store.has('launcher:ancient')).toBe(true)
 })
@@ -611,6 +630,7 @@ test('the session publishes its own key one second after start, with the session
     model: SESSION_MODEL,
     state: 'idle',
     turnStartedAt: null,
+    idleSince: NOW,
     subagents: [],
     updatedAt: NOW + 1000,
   })
@@ -651,6 +671,57 @@ test('turn.start and turn.complete of the main loop publish working, the turn st
     lastAnswer: 'the final answer',
   })
 })
+
+test('idleSince is the start of the session, is absent while a turn runs and is the instant the main loop stopped', async ($, on) => {
+  const world = stage(on)
+
+  await begin($)
+  await world.clock.advance(1000)
+
+  expect((world.store.get(ownKey) as SessionEntry).idleSince).toBe(NOW)
+
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await world.clock.advance(1000)
+
+  expect('idleSince' in (world.store.get(ownKey) as SessionEntry)).toBe(false)
+
+  await world.clock.advance(4000)
+  await complete($, { answer: 'done' })
+  await world.clock.advance(1000)
+
+  expect(world.store.get(ownKey)).toMatchObject({ state: 'idle', idleSince: NOW + 6000 })
+})
+
+test('a subagent turn.complete leaves idleSince where the main loop put it', async ($, on) => {
+  const world = stage(on)
+
+  await begin($)
+  await spawn($)
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await world.clock.advance(1000)
+  await complete($, { answer: 'done' })
+  await world.clock.advance(5000)
+  await complete($, { agentId: 'sub-1', answer: 'sub answer' })
+  await world.clock.advance(1000)
+
+  expect(world.store.get(ownKey)).toMatchObject({ state: 'idle', idleSince: NOW + 1000 })
+})
+
+for (const source of ['clear', 'resume', 'fork'] as const) {
+  test(`a ${source} restarts idleSince at the instant the session moved, even from a running turn`, async ($, on) => {
+    const world = stage(on)
+
+    await begin($)
+    await $.turn.start({ text: 'hi', turnId: 't1' })
+    await world.clock.advance(7000)
+    await $.session.end({ reason: source, sessionId: SESSION, resume: { id: SESSION } } as never)
+    world.sessionId = 'session-2'
+    await $.classic.SessionStart({ source })
+    await world.clock.advance(1000)
+
+    expect(world.store.get('sess:session-2')).toMatchObject({ state: 'idle', idleSince: NOW + 7000 })
+  })
+}
 
 test('a subagent turn.complete does not mark the session idle or set its last answer', async ($, on) => {
   const world = stage(on)
@@ -830,14 +901,14 @@ test('a store.set that throws breaks no hook and adds no write beyond the window
   await world.clock.advance(1000)
 
   expect(own()).toBe(2)
-  expect(await agentes($)).toContain('concluído')
+  expect(await agentPanel($)).toContain('concluído')
 
   await world.clock.advance(15_000)
 
   expect(own()).toBe(3)
 })
 
-test('with enableMonitor false /agentes is not registered and nothing is written to the store', { options: { enableMonitor: false } }, async ($, on) => {
+test('with enableMonitor false /agent-panel is not registered and nothing is written to the store', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on)
 
   await begin($)
@@ -849,8 +920,8 @@ test('with enableMonitor false /agentes is not registered and nothing is written
   await $.session.end({ reason: 'other', sessionId: SESSION, resume: { id: SESSION } } as never)
 
   expect(world.registered).toEqual(['as'])
-  expect(await agentes($)).toBe('bottom answered')
-  expect(await agentes($, 'sessoes')).toBe('bottom answered')
+  expect(await agentPanel($)).toBe('bottom answered')
+  expect(await agentPanel($, 'sessions')).toBe('bottom answered')
   expect(world.listCalls).toBe(0)
   expect([...world.store.keys()].filter(key => key.startsWith('sess:'))).toEqual([])
 })
@@ -871,14 +942,14 @@ test('with enableLauncher false the Monitor still works whole and /as is left to
 
   await begin($)
 
-  expect(world.registered).toEqual(['agentes'])
+  expect(world.registered).toEqual(['agent-panel'])
   expect(await run($, 'as', 'restricted')).toBe('bottom answered')
 
   await spawn($)
   await useTool($, 'Bash', 'sub-1')
   await useTool($, 'Bash')
 
-  expect(await agentes($)).toBe('● rodando  general-purpose  read the logs  —  0:00  0')
+  expect(await agentPanel($)).toBe('● rodando  general-purpose  read the logs  —  0:00  0')
 
   await world.clock.advance(1000)
 
@@ -894,7 +965,7 @@ test('with both options off no command is registered and no hook answers', { opt
 
   expect(world.registered).toEqual([])
   expect(await run($, 'as', 'worker')).toBe('bottom answered')
-  expect(await agentes($)).toBe('bottom answered')
+  expect(await agentPanel($)).toBe('bottom answered')
   expect(world.sets).toEqual([])
   expect(world.listCalls).toBe(0)
 })
@@ -904,7 +975,7 @@ test('with both options on both commands are registered', async ($, on) => {
 
   await begin($)
 
-  expect(world.registered).toEqual(['as', 'agentes'])
+  expect(world.registered).toEqual(['as', 'agent-panel'])
 })
 
 const hooksRegisteredWith = (options: Record<string, boolean>) => {
@@ -944,7 +1015,7 @@ test('a clear forgets the last reading of the other sessions: the status line co
   const world = stage(on, {
     store: {
       'sess:peer-1': entry({ state: 'working', updatedAt: NOW }),
-      'sess:peer-2': entry({ state: 'idle', updatedAt: NOW }),
+      'sess:peer-2': entry({ state: 'working', updatedAt: NOW }),
     },
   })
 
@@ -955,7 +1026,7 @@ test('a clear forgets the last reading of the other sessions: the status line co
   const ui = await $.ui.mount({ plugin: 'agent-studio', surface: 'terminal', component: 'SessionMode', props: FOOTER_PROPS })
   const texts = async () => [(await ui.find({ type: 'Text' }))?.text, world.statuses.at(-1)]
 
-  expect(await texts()).toEqual(['below', '2 sessões ativas'])
+  expect(await texts()).toEqual(['below', '2 sessões trabalhando'])
 
   await $.session.end({ reason: 'clear', sessionId: SESSION, resume: { id: SESSION } } as never)
   world.sessionId = 'session-2'
@@ -966,8 +1037,8 @@ test('a clear forgets the last reading of the other sessions: the status line co
 
   await world.clock.advance(15_000)
 
-  expect(await texts()).toEqual(['below', '2 sessões ativas'])
-  expect(world.statuses).toEqual(['2 sessões ativas', undefined, '2 sessões ativas'])
+  expect(await texts()).toEqual(['below', '2 sessões trabalhando'])
+  expect(world.statuses).toEqual(['2 sessões trabalhando', undefined, '2 sessões trabalhando'])
   await ui.unmount()
 })
 
@@ -983,6 +1054,6 @@ test('a compaction keeps the last reading of the other sessions', async ($, on) 
   await $.classic.SessionStart({ source: 'compact' })
   await ui.redraw()
 
-  expect(world.statuses).toEqual(['1 sessão ativa'])
+  expect(world.statuses).toEqual(['1 sessão trabalhando'])
   await ui.unmount()
 })

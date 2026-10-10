@@ -1,10 +1,11 @@
 import type { RenderElement } from 'claude-code'
 
-import * as messages from '../messages'
+import type { Messages } from '../messages'
 import type { PaneElements } from './pane'
 
 export const drawMessageField = (
   { Box, Input }: PaneElements,
+  messages: Messages,
   key: string,
   placeholder: string,
   onSend: (text: string) => void,

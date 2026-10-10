@@ -80,6 +80,7 @@ export type SubagentRow = {
   status: SubagentStatus
   tool: string | null
   tokens: number
+  cachedTokens: number
   startedAt: number
   endedAt: number | null
   durationMs: number | null
@@ -106,13 +107,14 @@ export type SessionEntry = {
   model: string | null
   state: PublishedState
   turnStartedAt: number | null
+  idleSince?: number
   subagents: readonly PublishedSubagent[]
   lastAnswer?: string
   title?: string
   updatedAt: number
 }
 
-export type SessionPresence = 'trabalhando' | 'ociosa' | 'inativa' | 'encerrada'
+export type SessionPresence = 'working' | 'idle' | 'stale' | 'ended'
 
 export type OtherSession = Omit<SessionEntry, 'state'> & { sessionId: string; presence: SessionPresence }
 

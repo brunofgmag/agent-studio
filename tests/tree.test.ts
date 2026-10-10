@@ -1,5 +1,6 @@
 import type { On } from 'claude-code'
-import { type Engine, expect, mock, test } from 'claude-code/testing'
+import { type Engine, expect, mock } from 'claude-code/testing'
+import { test } from './in-portuguese'
 
 type Surface = 'terminal' | 'desktop'
 
@@ -80,7 +81,7 @@ const runScenario = async ($: Engine, world: World) => {
   await complete($, 'sub-2')
   await world.clock.advance(3000)
   await $.command.run({
-    command: 'agentes',
+    command: 'agent-panel',
     args: '',
     origin: { kind: 'composer' },
     presentation: { isFullscreen: false, columns: 80 },
@@ -104,11 +105,11 @@ const outline = (element: Node | string): Outline => {
   return [`${element.type}${key}`, ...(element.children ?? []).map(outline)]
 }
 
-const RULE = '─'.repeat(80)
+const RULE = '─'.repeat(78)
 
-const treeRow = (key: string, mark: string, meta: string, task: string): Outline => [
+const treeRow = (key: string, mark: string, meta: readonly Outline[], task: string): Outline => [
   'Box',
-  ['Box', ['Box', ['Text', mark], [`Button#sub-${key}`], ['Text', meta]], ['Box', ['Text', task]]],
+  ['Box', ['Box', ['Text', mark], [`Button#sub-${key}`], ...meta], ['Box', ['Text', task]]],
 ]
 
 const TERMINAL_TREE: Outline = [
@@ -126,14 +127,19 @@ const TERMINAL_TREE: Outline = [
         [
           'Box',
           ['Text', 'Em andamento (1)'],
-          treeRow('sub-4', '●', 'rodando · 0:04 · 0', 'task of general-purpose'),
+          treeRow(
+            'sub-4',
+            '●',
+            [['Text', 'rodando ·'], ['Client#clock-sub-sub-4'], ['Text', '· 0']],
+            'task of general-purpose',
+          ),
         ],
         [
           'Box',
           ['Text', 'Terminados (3)'],
-          treeRow('sub-1', '✓', 'concluído · 0:00 · 0', 'task of Explore'),
-          treeRow('sub-2', '✓', 'concluído · 0:00 · 0', 'task of Plan'),
-          treeRow('sub-3', '✗', 'falhou · 0:00 · 0', 'task of reviewer'),
+          treeRow('sub-1', '✓', [['Text', 'concluído · 0:00 · 0']], 'task of Explore'),
+          treeRow('sub-2', '✓', [['Text', 'concluído · 0:00 · 0']], 'task of Plan'),
+          treeRow('sub-3', '✗', [['Text', 'falhou · 0:00 · 0']], 'task of reviewer'),
         ],
       ],
       ['Box', ['Text', 'Tab escolhe uma linha, Enter abre o detalhe e Esc fecha o painel.']],

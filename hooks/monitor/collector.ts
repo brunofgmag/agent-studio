@@ -31,6 +31,8 @@ type Tracked = {
   row: SubagentRow
   earlierTokens: number
   runTokens: number
+  earlierCached: number
+  runCached: number
   earlierMs: number
   tools: string[]
 }
@@ -53,7 +55,9 @@ const FINAL_OF_LISTED: Partial<Record<AgentInfo['status'], SubagentStatus>> = {
 }
 
 export const tokensOf = (usage: ModelUsage): number =>
-  usage.input_tokens + usage.output_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens
+  usage.input_tokens + usage.output_tokens + usage.cache_creation_input_tokens
+
+export const cachedOf = (usage: ModelUsage): number => usage.cache_read_input_tokens
 
 const blankRow = (id: string, startedAt: number): SubagentRow => ({
   id,
@@ -66,6 +70,7 @@ const blankRow = (id: string, startedAt: number): SubagentRow => ({
   status: 'running',
   tool: null,
   tokens: 0,
+  cachedTokens: 0,
   startedAt,
   endedAt: null,
   durationMs: null,
@@ -73,10 +78,19 @@ const blankRow = (id: string, startedAt: number): SubagentRow => ({
   exchanges: [],
 })
 
-const trackedOf = (row: SubagentRow): Tracked => ({ row, earlierTokens: 0, runTokens: 0, earlierMs: 0, tools: [] })
+const trackedOf = (row: SubagentRow): Tracked => ({
+  row,
+  earlierTokens: 0,
+  runTokens: 0,
+  earlierCached: 0,
+  runCached: 0,
+  earlierMs: 0,
+  tools: [],
+})
 
 const refresh = (tracked: Tracked) => {
   tracked.row.tokens = tracked.earlierTokens + tracked.runTokens
+  tracked.row.cachedTokens = tracked.earlierCached + tracked.runCached
   tracked.row.tool = tracked.tools.at(-1) ?? null
 }
 
@@ -220,6 +234,7 @@ export const createCollector = (): Collector => {
 
       resume(tracked)
       tracked.runTokens += usage === null || usage === undefined ? 0 : tokensOf(usage)
+      tracked.runCached += usage === null || usage === undefined ? 0 : cachedOf(usage)
       refresh(tracked)
     },
     turnCompleted: (facts, at) => {
@@ -230,7 +245,9 @@ export const createCollector = (): Collector => {
       }
 
       tracked.earlierTokens += facts.usage === undefined ? tracked.runTokens : tokensOf(facts.usage)
+      tracked.earlierCached += facts.usage === undefined ? tracked.runCached : cachedOf(facts.usage)
       tracked.runTokens = 0
+      tracked.runCached = 0
       tracked.earlierMs += facts.durationMs
       tracked.row.answer = facts.answer
 

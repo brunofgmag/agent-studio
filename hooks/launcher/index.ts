@@ -1,7 +1,7 @@
 import type { AgentSpawnInput, PluginOptions, PromptComposeSection, ToolCallInput, TurnStepInput } from 'claude-code'
 
 import type { ActiveAgent, AgentDefinition, CatalogView, ModelSwitch, ProcessFlags, SavedAgent, SavedSession, SessionState } from '../../types'
-import * as messages from '../messages'
+import type { Messages } from '../messages'
 import {
   EFFORTS,
   composeAsAgent,
@@ -60,7 +60,7 @@ const aliasesOf = (options: PluginOptions) => {
   return parseModelAliases(typeof text === 'string' ? text : '')
 }
 
-export const createLauncher = (options: PluginOptions): Launcher => {
+export const createLauncher = (options: PluginOptions, messages: Messages): Launcher => {
   const aliases = aliasesOf(options)
   let active: ActiveAgent | null = null
   let native: string | null = null

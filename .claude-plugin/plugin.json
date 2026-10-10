@@ -1,33 +1,39 @@
 {
   "name": "agent-studio",
   "version": "0.1.0",
-  "description": "Sessões como agente (/as) e painel de agentes",
+  "description": "Run a session as an agent (/as) and watch agents and sessions in a panel",
   "author": { "name": "Bruno" },
   "types": "./types/index.d.ts",
   "userConfig": {
     "enableLauncher": {
       "type": "boolean",
       "title": "Launcher",
-      "description": "Liga o comando /as, que faz a sessão atuar como um agente de .claude/agents",
+      "description": "Turns on the /as command, which makes the session act as an agent from .claude/agents",
       "default": true
     },
     "enableMonitor": {
       "type": "boolean",
       "title": "Monitor",
-      "description": "Liga o comando /agentes, que mostra os subagentes desta sessão e as outras sessões abertas",
+      "description": "Turns on the /agent-panel command, which shows this session's subagents and the other open sessions",
       "default": true
     },
     "shareAnswers": {
       "type": "boolean",
-      "title": "Compartilhar respostas",
-      "description": "Publica até 300 caracteres da última resposta desta sessão para as outras sessões lerem em /agentes sessoes",
+      "title": "Share answers",
+      "description": "Publishes up to 300 characters of this session's last answer so other sessions can read it in /agent-panel sessions",
       "default": true
     },
     "modelAliases": {
       "type": "string",
-      "title": "Apelidos de modelo",
-      "description": "Pares apelido=id separados por vírgula, usados quando o agente declara o modelo por apelido, como model: opus",
+      "title": "Model aliases",
+      "description": "Comma-separated alias=id pairs, used when an agent declares its model by alias, such as model: opus",
       "default": "opus=claude-opus-5-5,sonnet=claude-sonnet-5-5,haiku=claude-haiku-5-5"
+    },
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "Language of the plugin's messages: en or pt-BR",
+      "default": "en"
     }
   }
 }

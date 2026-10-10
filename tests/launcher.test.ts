@@ -1,5 +1,5 @@
 import type { On, PromptComposeSection, TurnStepInput } from 'claude-code'
-import { type Engine, type Plugin, expect, mock, test } from 'claude-code/testing'
+import { type Engine, type Plugin, expect, mock } from 'claude-code/testing'
 
 import {
   composeAsAgent,
@@ -11,8 +11,11 @@ import {
   toolDenial,
 } from '../hooks/launcher/apply'
 import { type Host, createLauncher } from '../hooks/launcher/index'
-import * as messages from '../hooks/messages'
+import { messagesIn } from '../hooks/messages'
 import type { AgentDefinition, ProcessFlags, SavedSession } from '../types'
+import { test } from './in-portuguese'
+
+const messages = messagesIn('pt-BR')
 
 type Agent = { file: string; text: string }
 
@@ -204,7 +207,7 @@ const stage = (on: On, setup: Setup = {}): Stage => {
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('command.register', (_$, e) => {
-    if (e.name !== 'agentes') {
+    if (e.name !== 'agent-panel') {
       world.registered.push(e.name)
     }
 
@@ -1829,7 +1832,7 @@ test('catalogView lists the resolved catalog with the active one marked, counts 
     [...DEFAULT_AGENTS, { file: pathOf('broken'), text: '---\nname: broken\n---\nx' }],
     listed,
   )
-  const launcher = createLauncher({ modelAliases: 'sonnet=claude-sonnet-5-5' })
+  const launcher = createLauncher({ modelAliases: 'sonnet=claude-sonnet-5-5' }, messages)
 
   await launcher.start(host)
 
@@ -1872,7 +1875,7 @@ test('catalogView carries the frontmatter color and leaves it undefined when the
     ],
     [],
   )
-  const launcher = createLauncher({})
+  const launcher = createLauncher({}, messages)
 
   await launcher.start(host)
 
@@ -1883,7 +1886,7 @@ test('catalogView carries the frontmatter color and leaves it undefined when the
 
 test('catalogView reports the native name and marks no agent active in a native session', async () => {
   const host = catalogHostOf(DEFAULT_AGENTS, [])
-  const launcher = createLauncher({})
+  const launcher = createLauncher({}, messages)
 
   await launcher.start(host)
   await launcher.command(host, 'plain')
@@ -1897,7 +1900,7 @@ test('catalogView reports the native name and marks no agent active in a native 
 
 test('catalogView of an empty catalog is an empty list with no skipped file', async () => {
   const host = catalogHostOf([], [])
-  const launcher = createLauncher({})
+  const launcher = createLauncher({}, messages)
 
   await launcher.start(host)
 
@@ -1923,7 +1926,7 @@ const switchHostOf = (promptFrozen: boolean): Host => ({
 
 const switchLauncherOf = async (promptFrozen: boolean, ...before: string[]) => {
   const host = switchHostOf(promptFrozen)
-  const launcher = createLauncher({})
+  const launcher = createLauncher({}, messages)
 
   await launcher.start(host)
 

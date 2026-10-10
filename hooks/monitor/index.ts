@@ -2,7 +2,7 @@ import type { AgentInfo, ModelUsage, PluginOptions } from 'claude-code'
 
 import type { OtherSession, SubagentLine } from '../../types'
 import type { AgentReading } from '../launcher/index'
-import * as messages from '../messages'
+import type { Messages } from '../messages'
 import { type CompletionFacts, type SpawnFacts, type SpawnOutcome, createCollector } from './collector'
 import { type ClockPort, type Registry, type StorePort, type Summary, createRegistry } from './registry'
 
@@ -25,7 +25,7 @@ export type LauncherReading = { current: () => AgentReading | null }
 
 export type Monitor = {
   start: (host: MonitorHost) => Promise<void>
-  moved: (facts: SessionFacts) => void
+  moved: (facts: SessionFacts, at: number) => void
   titled: (title: string | undefined) => void
   turnStarted: (at: number) => void
   turnCompleted: (facts: CompletionFacts, at: number) => void
@@ -47,11 +47,11 @@ export type Monitor = {
 
 const NO_SESSION: SessionFacts = { sessionId: '', cwd: '', repo: null, model: null }
 
-export const SESSIONS_ARGUMENT = 'sessoes'
+export const SESSIONS_ARGUMENT = 'sessions'
 
 export const SESSION_CHANGING_SOURCES: readonly string[] = ['clear', 'resume', 'fork']
 
-export const createMonitor = (options: PluginOptions, launcher: LauncherReading): Monitor => {
+export const createMonitor = (options: PluginOptions, launcher: LauncherReading, messages: Messages): Monitor => {
   const collector = createCollector()
   const shareAnswers = options.shareAnswers !== false
   let registry: Registry | null = null
@@ -60,6 +60,7 @@ export const createMonitor = (options: PluginOptions, launcher: LauncherReading)
   let facts: SessionFacts = NO_SESSION
   let working = false
   let turnStartedAt: number | null = null
+  let idleSince: number | undefined
   let lastAnswer: string | undefined
   let title: string | undefined
 
@@ -73,6 +74,7 @@ export const createMonitor = (options: PluginOptions, launcher: LauncherReading)
       model: agent?.model ?? facts.model,
       state: working ? 'working' : 'idle',
       turnStartedAt,
+      ...(idleSince === undefined ? {} : { idleSince }),
       subagents: collector.lines().map(({ type, task, status, tool, tokens, endedAt }) => ({
         type,
         task,
@@ -93,6 +95,14 @@ export const createMonitor = (options: PluginOptions, launcher: LauncherReading)
       engine?.invalidate()
     } catch {
       return
+    }
+  }
+
+  const instantOf = async (host: MonitorHost): Promise<number | undefined> => {
+    try {
+      return await host.clock.now()
+    } catch {
+      return undefined
     }
   }
 
@@ -130,6 +140,7 @@ export const createMonitor = (options: PluginOptions, launcher: LauncherReading)
       try {
         engine = host
         facts = await host.session()
+        idleSince ??= await instantOf(host)
         registry ??= createRegistry({
           store: host.store,
           clock: host.clock,
@@ -146,12 +157,13 @@ export const createMonitor = (options: PluginOptions, launcher: LauncherReading)
         registry = null
       }
     },
-    moved: next => {
+    moved: (next, at) => {
       collector.clear()
       others = []
       facts = next
       working = false
       turnStartedAt = null
+      idleSince = at
       lastAnswer = undefined
       title = undefined
       registry?.moveTo(next.sessionId)
@@ -167,12 +179,14 @@ export const createMonitor = (options: PluginOptions, launcher: LauncherReading)
     turnStarted: at => {
       working = true
       turnStartedAt = at
+      idleSince = undefined
       changed()
     },
     turnCompleted: (completion, at) => {
       if (completion.agentId === undefined) {
         working = false
         turnStartedAt = null
+        idleSince = at
         lastAnswer = completion.answer
       } else {
         collector.turnCompleted(completion, at)

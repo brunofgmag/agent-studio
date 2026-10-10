@@ -3,13 +3,15 @@ import type {
   CatalogAgent,
   Exchange,
   OtherSession,
-  PaneTab,
   PublishedSubagent,
   SessionPresence,
   SkippedFile,
   SubagentLine,
   SubagentStatus,
 } from '../types'
+import { type ClockProps, agoBucket, clock } from './timing'
+import { type Words, en } from './words/en'
+import { ptBr } from './words/pt-br'
 
 export type ListedAgent = {
   name: string
@@ -28,148 +30,33 @@ export type ActiveSummary = {
   disallowedTools: readonly string[] | undefined
 }
 
+export type TickingMeta = { before: string; clock: ClockProps; after: string }
+
+export type RowParts = {
+  mark: string
+  markColor: string
+  name: string
+  meta: string
+  ticking?: TickingMeta
+  description: string
+  isDim?: boolean
+}
+
+export type SubagentGroup = { heading: string; lines: readonly SubagentLine[] }
+
+export type SessionGroup = { heading: string; sessions: readonly OtherSession[] }
+
+export type FooterFacts = {
+  agent: { name: string; model?: string; effort?: string } | null
+  running: number
+  peers: number
+}
+
 const DESCRIPTION_LIMIT = 80
 
 const PROMPT_PREVIEW_LIMIT = 300
 
 const NEWLINE = /\r?\n/
-
-const PROMPT_SWAP = 'depois de um /clear ou de uma compactação'
-
-const SOURCE_LABEL: Record<AgentSource, string> = { project: 'projeto', user: 'usuário' }
-
-const plural = (count: number, one: string, many: string) => (count === 1 ? one : many)
-
-const cut = (text: string, limit = DESCRIPTION_LIMIT): string => {
-  const flat = text.replace(/\s+/g, ' ').trim()
-
-  return flat.length <= limit ? flat : `${flat.slice(0, limit - 1).trimEnd()}…`
-}
-
-const SKIP_REASON: Record<SkippedFile['reason'], string> = {
-  'no-opening-fence': 'a primeira linha não é ---',
-  'no-closing-fence': 'falta o --- que fecha o cabeçalho',
-  'no-name': 'falta o campo name',
-  'no-description': 'falta o campo description',
-  unreadable: 'não foi possível ler o arquivo',
-}
-
-const skippedLines = (skipped: readonly SkippedFile[]): string[] =>
-  skipped.length === 0
-    ? []
-    : [
-        `${skipped.length} ${plural(skipped.length, 'arquivo ignorado', 'arquivos ignorados')}:`,
-        ...skipped.map(file => `  ${file.path}: ${SKIP_REASON[file.reason]}`),
-      ]
-
-export const COMMAND_DESCRIPTION = 'Faz a sessão atuar como um agente de .claude/agents'
-
-export const COMMAND_ARGUMENT_HINT = '[agente|off]'
-
-export const noAgentsFound = 'Nenhum agente encontrado em .claude/agents.'
-
-export const catalogList = (agents: readonly ListedAgent[], skipped: readonly SkippedFile[]): string => {
-  if (agents.length === 0) {
-    return [noAgentsFound, ...skippedLines(skipped)].join('\n')
-  }
-
-  const rows = agents.map(
-    agent => `${agent.isActive ? '* ' : '  '}${agent.name} (${SOURCE_LABEL[agent.source]}): ${cut(agent.description)}`,
-  )
-
-  return [`Agentes disponíveis (${agents.length}):`, ...rows, ...skippedLines(skipped)].join('\n')
-}
-
-export const activeSummary = (active: ActiveSummary | null): string => {
-  if (active === null) {
-    return 'Nenhum agente ativo. A sessão segue o comportamento padrão.'
-  }
-
-  return [
-    `Agente ativo: ${active.name} (${SOURCE_LABEL[active.source]})`,
-    `Arquivo: ${active.path}`,
-    `Modelo: ${active.model ?? 'o da sessão'}`,
-    `Effort: ${active.effort ?? 'o da sessão'}`,
-    `Ferramentas permitidas: ${active.tools === undefined ? 'todas' : active.tools.join(', ')}`,
-    `Ferramentas proibidas: ${active.disallowedTools === undefined ? 'nenhuma' : active.disallowedTools.join(', ')}`,
-  ].join('\n')
-}
-
-export const reloaded = (count: number, skipped: readonly SkippedFile[]): string =>
-  [`${count} ${plural(count, 'agente encontrado', 'agentes encontrados')}.`, ...skippedLines(skipped)].join('\n')
-
-export const activeFileGone = (name: string): string =>
-  `O arquivo do agente ${name} não está mais no catálogo. Ele continua ativo como foi carregado; para desativar, use /as off.`
-
-export const unknownAgent = (name: string, names: readonly string[]): string =>
-  names.length === 0
-    ? `Não há agente chamado "${name}", e nenhum agente foi encontrado em .claude/agents.`
-    : `Não há agente chamado "${name}". Agentes disponíveis: ${names.join(', ')}.`
-
-export const activatedBeforeStart = (name: string): string => `Agente ${name} ativo.`
-
-export const activatedAfterStart = (name: string): string =>
-  `Agente ${name} ativo. O modelo e as ferramentas já valem. O system prompt só troca ${PROMPT_SWAP}.`
-
-export const activatedWithoutNotice = (name: string): string =>
-  `Agente ${name} ativo. O modelo e as ferramentas já valem, mas as instruções do agente não entraram na conversa, porque a sessão recusou a mensagem. Elas só chegam com o system prompt, ${PROMPT_SWAP}.`
-
-export const deactivatedBeforeStart = (name: string): string => `Agente ${name} desativado.`
-
-export const deactivatedAfterStart = (name: string): string =>
-  `Agente ${name} desativado. O system prompt só volta ao padrão ${PROMPT_SWAP}.`
-
-export const deactivatedWithoutNotice = (name: string): string =>
-  `Agente ${name} desativado. O modelo e as ferramentas já voltaram ao padrão, mas o aviso de que o papel acabou não entrou na conversa, porque a sessão recusou a mensagem. O system prompt só volta ao padrão ${PROMPT_SWAP}.`
-
-const UNCACHED_NEXT_TURN = 'O próximo turno relê a conversa inteira sem cache.'
-
-export const modelChanges = (from: string, to: string): string =>
-  `O modelo muda de ${from} para ${to}. ${UNCACHED_NEXT_TURN}`
-
-export const modelReturns = (from: string, to: string): string =>
-  `O modelo volta de ${from} para ${to}. ${UNCACHED_NEXT_TURN}`
-
-export const alreadyOff ='Nenhum agente está ativo.'
-
-export const nativeSession = (agent: string): string =>
-  agent === ''
-    ? 'Esta sessão já roda como um agente nativo (claude --agent). Para trocar, abra outra sessão.'
-    : `Esta sessão já roda como o agente ${agent} (claude --agent). Para trocar, abra outra sessão.`
-
-export const droppedForNative = (name: string): string =>
-  `Esta sessão já roda como um agente nativo (claude --agent), então o agente ${name} do /as foi desativado.`
-
-export const unresolvedModel = (alias: string): string =>
-  `O modelo "${alias}" não tem apelido configurado, então a sessão mantém o modelo atual. Defina o apelido na opção "Apelidos de modelo" do plugin.`
-
-export const unappliedField = (field: string): string =>
-  `O /as não aplica o campo ${field} deste agente.`
-
-export const unknownEffort = (value: string, accepted: readonly string[]): string =>
-  `O effort "${value}" não é um dos valores aceitos (${accepted.join(', ')}), então os passos mantêm o effort da sessão.`
-
-export const unknownDefaultAgent = (name: string): string =>
-  `O agente "${name}", definido na chave agent do settings, não existe em .claude/agents. A sessão começa sem agente.`
-
-export const statusLine = (name: string, model: string | undefined, effort: string | undefined): string =>
-  [`@${name}`, model, effort].filter(part => part !== undefined).join(' · ')
-
-export const agentStatus = (agent: { name: string; model?: string; effort?: string } | null): string | null =>
-  agent === null ? null : statusLine(agent.name, agent.model, agent.effort)
-
-export const AGENTS_COMMAND_DESCRIPTION = 'Mostra os subagentes desta sessão e as outras sessões abertas'
-
-export const AGENTS_ARGUMENT_HINT = '[sessoes]'
-
-const STATUS_ICON: Record<SubagentStatus, string> = { running: '●', completed: '✓', failed: '✗', stopped: '■' }
-
-const STATUS_WORD: Record<SubagentStatus, string> = {
-  running: 'rodando',
-  completed: 'concluído',
-  failed: 'falhou',
-  stopped: 'parado',
-}
 
 const NO_TOOL = '—'
 
@@ -179,14 +66,55 @@ const ROW_DESCRIPTION_LIMIT = 200
 
 const META_SEPARATOR = ' · '
 
+const META_MARK = META_SEPARATOR.trim()
+
 const TOAST_DETAIL_LIMIT = 120
 
-const pad = (value: number) => String(value).padStart(2, '0')
+const FOOTER_SEPARATOR = ' · '
 
-const clock = (ms: number): string => {
-  const seconds = Math.max(0, Math.floor(ms / 1000))
+const STATUS_ICON: Record<SubagentStatus, string> = { running: '●', completed: '✓', failed: '✗', stopped: '■' }
 
-  return `${Math.floor(seconds / 60)}:${pad(seconds % 60)}`
+const SUBAGENT_COLOR: Record<SubagentStatus, string> = {
+  running: 'suggestion',
+  completed: 'success',
+  failed: 'error',
+  stopped: 'inactive',
+}
+
+const SUMMARY_ORDER: readonly SubagentStatus[] = ['running', 'completed', 'failed', 'stopped']
+
+const PRESENCE_COLOR: Record<SessionPresence, string> = {
+  working: 'success',
+  idle: 'warning',
+  stale: 'inactive',
+  ended: 'inactive',
+}
+
+const PRESENCE_ORDER: readonly SessionPresence[] = ['working', 'idle', 'stale', 'ended']
+
+const PATH_SEPARATOR = /[\\/]/
+
+const MARKDOWN_MARKS = /[*`]+|^#+\s+/gm
+
+const AGENT_COLORS = new Map([
+  ['red', '#d1242f'],
+  ['blue', '#3b82f6'],
+  ['green', '#22a06b'],
+  ['yellow', '#d4a72c'],
+  ['purple', '#8250df'],
+  ['orange', '#e16f24'],
+  ['pink', '#db61a2'],
+  ['cyan', '#1b9aaa'],
+])
+
+const NO_AGENT_COLOR = 'subtle'
+
+const PORTUGUESE_TAGS: readonly string[] = ['pt-br', 'pt']
+
+const cut = (text: string, limit = DESCRIPTION_LIMIT): string => {
+  const flat = text.replace(/\s+/g, ' ').trim()
+
+  return flat.length <= limit ? flat : `${flat.slice(0, limit - 1).trimEnd()}…`
 }
 
 const abbreviated = (tokens: number): string => {
@@ -201,85 +129,36 @@ const abbreviated = (tokens: number): string => {
   return tokens < 1_000_000 ? `${Math.round(tokens / 1000)}k` : `${(tokens / 1_000_000).toFixed(1)}M`
 }
 
-const since = (ms: number): string => {
-  const seconds = Math.max(0, Math.floor(ms / 1000))
-
-  if (seconds < 60) {
-    return `há ${seconds} s`
-  }
-
-  return seconds < 3600 ? `há ${Math.floor(seconds / 60)} min` : `há ${Math.floor(seconds / 3600)} h`
-}
-
-const statusLabel = (status: SubagentStatus): string => `${STATUS_ICON[status]} ${STATUS_WORD[status]}`
-
 const durationOf = (line: SubagentLine, now: number): number => line.durationMs ?? now - line.startedAt
-
-export const subagentRowText = (line: SubagentLine, now: number): string =>
-  [
-    statusLabel(line.status),
-    line.type,
-    cut(line.task, TASK_LIMIT),
-    line.tool ?? NO_TOOL,
-    clock(durationOf(line, now)),
-    abbreviated(line.tokens),
-  ].join('  ')
-
-export type RowParts = {
-  mark: string
-  markColor: string
-  name: string
-  meta: string
-  description: string
-  isDim?: boolean
-}
 
 const metaOf = (parts: readonly (string | null)[]): string =>
   parts.filter(part => part !== null && part !== '').join(META_SEPARATOR)
 
-const SUBAGENT_COLOR: Record<SubagentStatus, string> = {
-  running: 'suggestion',
-  completed: 'success',
-  failed: 'error',
-  stopped: 'inactive',
-}
+type Timed = { text: string; props: ClockProps | null }
 
-export const subagentRow = (line: SubagentLine, now: number): RowParts => ({
-  mark: STATUS_ICON[line.status],
-  markColor: SUBAGENT_COLOR[line.status],
-  name: line.type,
-  meta: metaOf([STATUS_WORD[line.status], line.tool, clock(durationOf(line, now)), abbreviated(line.tokens)]),
-  description: cut(line.task, ROW_DESCRIPTION_LIMIT),
-})
+const timedMeta = (
+  head: readonly (string | null)[],
+  timed: Timed | null,
+  tail: readonly (string | null)[],
+): Pick<RowParts, 'meta' | 'ticking'> => {
+  const meta = metaOf([...head, timed?.text ?? null, ...tail])
 
-const subagentLine = (line: SubagentLine, now: number): string =>
-  `${'  '.repeat(line.depth)}${subagentRowText(line, now)}`
-
-export const noSubagents = 'Nenhum subagente nesta sessão.'
-
-const SUMMARY_WORDS: readonly (readonly [SubagentStatus, string, string])[] = [
-  ['running', 'rodando', 'rodando'],
-  ['completed', 'concluído', 'concluídos'],
-  ['failed', 'falhou', 'falharam'],
-  ['stopped', 'parado', 'parados'],
-]
-
-export const subagentSummary = (lines: readonly SubagentLine[]): string => {
-  if (lines.length === 0) {
-    return ''
+  if (timed?.props == null) {
+    return { meta }
   }
 
-  const counts = SUMMARY_WORDS.map(([status, one, many]) => {
-    const count = lines.filter(line => line.status === status).length
+  const before = metaOf(head)
+  const after = metaOf(tail)
 
-    return count === 0 ? null : `${count} ${plural(count, one, many)}`
-  })
-  const tokens = lines.reduce((total, line) => total + line.tokens, 0)
-
-  return metaOf([...counts, `${abbreviated(tokens)} tokens`])
+  return {
+    meta,
+    ticking: {
+      before: before === '' ? '' : `${before} ${META_MARK}`,
+      clock: timed.props,
+      after: after === '' ? '' : `${META_MARK} ${after}`,
+    },
+  }
 }
-
-export type SubagentGroup = { heading: string; lines: readonly SubagentLine[] }
 
 const treesOf = (lines: readonly SubagentLine[]): SubagentLine[][] =>
   lines.reduce<SubagentLine[][]>((trees, line) => {
@@ -296,198 +175,14 @@ const treesOf = (lines: readonly SubagentLine[]): SubagentLine[][] =>
 
 const isRunning = ({ status }: SubagentLine): boolean => status === 'running'
 
-export const subagentGroups = (lines: readonly SubagentLine[]): SubagentGroup[] => {
-  const trees = treesOf(lines)
-  const active = trees.filter(tree => tree.some(isRunning)).flat()
-  const finished = trees.filter(tree => !tree.some(isRunning)).flat()
-
-  return [
-    { heading: `Em andamento (${active.length})`, lines: active },
-    { heading: `Terminados (${finished.length})`, lines: finished },
-  ].filter(({ lines: group }) => group.length > 0)
-}
-
-export const agentInForce = (statusText: string): string => `Agente em vigor: ${statusText}`
-
-export const subagentTree = (header: string | null, lines: readonly SubagentLine[], now: number): string =>
-  [...(header === null ? [] : [header]), ...lines.map(line => subagentLine(line, now))].join('\n')
-
-export const noOtherSessions = 'Nenhuma outra sessão registrada.'
-
-const sessionAgent = (session: OtherSession): string =>
-  session.agent === null ? 'sem agente' : `@${session.agent}`
-
-const sessionSubagentCount = (session: OtherSession): string =>
-  `${session.subagents.length} ${plural(session.subagents.length, 'subagente', 'subagentes')}`
-
-const sessionLine = (session: OtherSession, now: number): string =>
-  [
-    session.cwd,
-    sessionAgent(session),
-    session.presence,
-    sessionSubagentCount(session),
-    since(now - session.updatedAt),
-  ].join('  ')
-
-const PRESENCE_COLOR: Record<SessionPresence, string> = {
-  trabalhando: 'success',
-  ociosa: 'warning',
-  inativa: 'inactive',
-  encerrada: 'inactive',
-}
-
-const PRESENCE_ORDER: readonly SessionPresence[] = ['trabalhando', 'ociosa', 'inativa', 'encerrada']
-
-const PATH_SEPARATOR = /[\\/]/
-
-const isEnded = ({ presence }: OtherSession): boolean => presence === 'encerrada'
+const isEnded = ({ presence }: OtherSession): boolean => presence === 'ended'
 
 const folderName = (cwd: string): string => cwd.split(PATH_SEPARATOR).findLast(part => part !== '') ?? cwd
 
-export const sessionName = (session: OtherSession): string =>
-  session.title === undefined || session.title.trim() === '' ? folderName(session.cwd) : session.title.trim()
-
-const MARKDOWN_MARKS = /[*`]+|^#+\s+/gm
-
 const unmarked = (text: string): string => text.replace(MARKDOWN_MARKS, '')
-
-const sessionSummary = (session: OtherSession): string => {
-  const answer = cut(unmarked(session.lastAnswer ?? ''), ROW_DESCRIPTION_LIMIT)
-
-  return [session.subagents.length === 0 ? null : sessionSubagentCount(session), answer === '' ? session.cwd : answer]
-    .filter(part => part !== null)
-    .join(META_SEPARATOR)
-}
-
-export const sessionRow = (session: OtherSession, now: number): RowParts => ({
-  mark: '●',
-  markColor: PRESENCE_COLOR[session.presence],
-  name: sessionName(session),
-  meta: metaOf([sessionAgent(session), session.presence, since(now - session.updatedAt)]),
-  description: sessionSummary(session),
-  isDim: isEnded(session),
-})
-
-export type SessionGroup = { heading: string; sessions: readonly OtherSession[] }
 
 const byPresenceThenNewest = (a: OtherSession, b: OtherSession): number =>
   PRESENCE_ORDER.indexOf(a.presence) - PRESENCE_ORDER.indexOf(b.presence) || b.updatedAt - a.updatedAt
-
-export const sessionGroups = (sessions: readonly OtherSession[]): SessionGroup[] => {
-  const sorted = [...sessions].sort(byPresenceThenNewest)
-  const open = sorted.filter(session => !isEnded(session))
-  const ended = sorted.filter(isEnded)
-
-  return [
-    { heading: `Abertas (${open.length})`, sessions: open },
-    { heading: `Encerradas (${ended.length})`, sessions: ended },
-  ].filter(({ sessions: group }) => group.length > 0)
-}
-
-export const otherSessions = (sessions: readonly OtherSession[], now: number): string =>
-  [
-    `Outras sessões (${sessions.length}):`,
-    ...sessions.map(session => `  ${sessionLine(session, now)}`),
-  ].join('\n')
-
-export const agentsUsage = 'Uso: /agentes para os subagentes desta sessão, /agentes sessoes para as outras sessões.'
-
-export const PANE_TITLE = 'Agentes'
-
-export const panelOpened = 'Painel de agentes aberto.'
-
-export const panelOpenedOnSessions = 'Painel de agentes aberto na aba Outras sessões.'
-
-export const TAB_LABELS: Record<PaneTab, string> = { 1: 'Esta sessão', 2: 'Outras sessões', 3: 'Agentes' }
-
-export const sessionHeader = (agentStatus: string | null): string =>
-  agentStatus === null ? 'Sessão sem agente' : `Sessão como ${agentStatus}`
-
-export const panelOpenedOnAgents = 'Painel de agentes aberto na aba Agentes.'
-
-export const catalogUnreadable = 'Não foi possível ler o catálogo de agentes.'
-
-export const launcherOff =
-  'O Launcher está desligado. Ligue a opção "Launcher" nas opções do plugin para listar e usar agentes.'
-
-export const catalogHeading = (count: number): string => `Agentes disponíveis (${count})`
-
-const AGENT_COLORS = new Map([
-  ['red', '#d1242f'],
-  ['blue', '#3b82f6'],
-  ['green', '#22a06b'],
-  ['yellow', '#d4a72c'],
-  ['purple', '#8250df'],
-  ['orange', '#e16f24'],
-  ['pink', '#db61a2'],
-  ['cyan', '#1b9aaa'],
-])
-
-const NO_AGENT_COLOR = 'subtle'
-
-export const agentColor = (color: string | undefined): string => AGENT_COLORS.get(color ?? '') ?? NO_AGENT_COLOR
-
-const toolCount = (tools: readonly string[]): string => `${tools.length} ${plural(tools.length, 'ferramenta', 'ferramentas')}`
-
-export const catalogRow = (agent: CatalogAgent): RowParts => ({
-  mark: '●',
-  markColor: agentColor(agent.color),
-  name: agent.name,
-  meta: metaOf([
-    SOURCE_LABEL[agent.source],
-    agent.model === undefined ? 'modelo da sessão' : `modelo: ${agent.model}`,
-    agent.tools === undefined ? null : toolCount(agent.tools),
-    agent.isActive ? 'ativo' : null,
-  ]),
-  description: cut(agent.description),
-})
-
-export const USE_LABEL = 'Usar'
-
-export const CONFIRM_LABEL = 'Confirmar'
-
-export const catalogSkipped = (count: number): string =>
-  `${count} ${plural(count, 'arquivo ignorado', 'arquivos ignorados')}. Os motivos aparecem em /as --reload.`
-
-export const SWITCH_LABEL = 'Trocar agente'
-
-export const OFF_OPTION_LABEL = 'desligar'
-
-export const listHint = 'Tab escolhe uma linha, Enter abre o detalhe e Esc fecha o painel.'
-
-export const detailHint = 'Esc fecha o painel.'
-
-export const BACK_LABEL = 'Voltar'
-
-export const STOP_LABEL = 'Parar'
-
-export const promptHeading = 'Prompt dado'
-
-export const answerHeading = 'Resposta'
-
-export const noAnswerYet = 'Sem resposta ainda.'
-
-export const noPrompt = 'Prompt não registrado.'
-
-export const PROMPT_SHOW_LABEL = 'mostrar tudo'
-
-export const PROMPT_HIDE_LABEL = 'recolher'
-
-export const promptLines = (prompt: string): string => {
-  const count = prompt.trimEnd().split(NEWLINE).length
-
-  return `${count} ${plural(count, 'linha', 'linhas')}`
-}
-
-export const promptPreview = (prompt: string): string => cut(prompt, PROMPT_PREVIEW_LIMIT)
-
-export const earlierLabel = (earlier: readonly Exchange[]): string => {
-  const answers = earlier.filter(({ kind }) => kind === 'answer').length
-
-  return answers === 0 ? `Mensagens anteriores (${earlier.length})` : `Respostas anteriores (${answers})`
-}
-
-export const youSaid = (text: string): string => `Você: ${text}`
 
 const toastDetail = (detail: string): string => {
   const flat = cut(detail, TOAST_DETAIL_LIMIT)
@@ -495,69 +190,361 @@ const toastDetail = (detail: string): string => {
   return flat === '' ? '.' : `: ${flat}`
 }
 
-export const stopRequested = (type: string, detail: string): string =>
-  `Pedido de parada enviado a ${type}${toastDetail(detail)}`
+const statusLine = (name: string, model: string | undefined, effort: string | undefined): string =>
+  [`@${name}`, model, effort].filter(part => part !== undefined).join(' · ')
 
-export const stopFailed = (type: string, reason: string): string =>
-  `Não foi possível parar ${type}${toastDetail(reason)}`
+const agentStatus = (agent: { name: string; model?: string; effort?: string } | null): string | null =>
+  agent === null ? null : statusLine(agent.name, agent.model, agent.effort)
 
-export const lastAnswerHeading = 'Última resposta'
+const sessionName = (session: OtherSession): string =>
+  session.title === undefined || session.title.trim() === '' ? folderName(session.cwd) : session.title.trim()
 
-export const noSharedAnswer = 'Nenhuma resposta publicada.'
+const agentColor = (color: string | undefined): string => AGENT_COLORS.get(color ?? '') ?? NO_AGENT_COLOR
 
-export const peerSubagentsHeading = (count: number): string => `Subagentes desta sessão (${count})`
+const promptPreview = (prompt: string): string => cut(prompt, PROMPT_PREVIEW_LIMIT)
 
-export const noPeerSubagents = 'Nenhum subagente publicado.'
+const messagesOver = (words: Words) => {
+  const skippedLines = (skipped: readonly SkippedFile[]): string[] =>
+    skipped.length === 0
+      ? []
+      : [
+          words.skippedHeading(skipped.length),
+          ...skipped.map(file => `  ${file.path}: ${words.skipReason[file.reason]}`),
+        ]
 
-export const MESSAGE_PLACEHOLDER_SUBAGENT = 'Mensagem para este subagente'
+  const catalogList = (agents: readonly ListedAgent[], skipped: readonly SkippedFile[]): string => {
+    if (agents.length === 0) {
+      return [words.noAgentsFound, ...skippedLines(skipped)].join('\n')
+    }
 
-export const MESSAGE_PLACEHOLDER_SESSION = 'Mensagem para esta sessão'
+    const rows = agents.map(
+      agent =>
+        `${agent.isActive ? '* ' : '  '}${agent.name} (${words.sourceLabel[agent.source]}): ${cut(agent.description)}`,
+    )
 
-export const SEND_LABEL = 'enviar'
+    return [words.catalogListHeading(agents.length), ...rows, ...skippedLines(skipped)].join('\n')
+  }
 
-export const STATUS_LABEL = 'Status'
+  const activeSummary = (active: ActiveSummary | null): string => {
+    if (active === null) {
+      return words.noActiveAgent
+    }
 
-export const STATUS_REQUEST = 'Responda em uma linha o que você está fazendo agora.'
+    return [
+      words.activeAgentLine(active.name, words.sourceLabel[active.source]),
+      words.fileLine(active.path),
+      words.modelLine(active.model ?? words.sessionDefault),
+      words.effortLine(active.effort ?? words.sessionDefault),
+      words.allowedToolsLine(active.tools === undefined ? words.allTools : active.tools.join(', ')),
+      words.disallowedToolsLine(
+        active.disallowedTools === undefined ? words.noTools : active.disallowedTools.join(', '),
+      ),
+    ].join('\n')
+  }
 
-export const subagentTarget = (type: string): string => `o subagente ${type}`
+  const reloaded = (count: number, skipped: readonly SkippedFile[]): string =>
+    [words.reloadedCount(count), ...skippedLines(skipped)].join('\n')
 
-export const sessionTarget = (session: OtherSession): string => `a sessão em ${session.cwd}`
+  const unknownAgent = (name: string, names: readonly string[]): string =>
+    names.length === 0 ? words.unknownAgentNoCatalog(name) : words.unknownAgent(name, names.join(', '))
 
-export const messageSent = (target: string): string => `Mensagem enviada para ${target}.`
+  const nativeSession = (agent: string): string =>
+    agent === '' ? words.nativeSessionUnnamed : words.nativeSessionNamed(agent)
 
-export const messageRelayed = (target: string): string =>
-  `O modo auto recusou o envio direto. A mensagem para ${target} virou um pedido na conversa.`
+  const unknownEffort = (value: string, accepted: readonly string[]): string =>
+    words.unknownEffort(value, accepted.join(', '))
 
-export const messageFailed = (target: string, reason: string): string =>
-  `Não foi possível enviar a mensagem para ${target}${toastDetail(reason)}`
+  const AGO_WORDS = { seconds: words.secondsAgo, minutes: words.minutesAgo, hours: words.hoursAgo }
 
-export const publishedSubagentText = (subagent: PublishedSubagent): string =>
-  [
-    statusLabel(subagent.status),
-    subagent.type,
-    cut(subagent.task, TASK_LIMIT),
-    subagent.tool ?? NO_TOOL,
-    abbreviated(subagent.tokens),
-  ].join('  ')
+  const since = (ms: number): string => {
+    const { unit, amount } = agoBucket(ms)
 
-export const FOOTER_PANEL_LABEL = 'Painel'
+    return AGO_WORDS[unit](amount)
+  }
 
-const FOOTER_SEPARATOR = ' · '
+  const timeText = (props: ClockProps, now: number): string =>
+    props.kind === 'elapsed' ? clock(now - props.since) : since(now - props.since)
 
-export type FooterFacts = {
-  agent: { name: string; model?: string; effort?: string } | null
-  running: number
-  peers: number
+  const agoFrom = (at: number): ClockProps => ({ kind: 'ago', since: at, templates: words.ago })
+
+  const statusLabel = (status: SubagentStatus): string => `${STATUS_ICON[status]} ${words.statusWord[status]}`
+
+  const subagentRowText = (line: SubagentLine, now: number): string =>
+    [
+      statusLabel(line.status),
+      line.type,
+      cut(line.task, TASK_LIMIT),
+      line.tool ?? NO_TOOL,
+      clock(durationOf(line, now)),
+      abbreviated(line.tokens),
+    ].join('  ')
+
+  const lineTime = (line: SubagentLine, now: number): Timed => ({
+    text: clock(durationOf(line, now)),
+    props: line.status === 'running' && line.durationMs === null ? { kind: 'elapsed', since: line.startedAt } : null,
+  })
+
+  const subagentRow = (line: SubagentLine, now: number): RowParts => ({
+    mark: STATUS_ICON[line.status],
+    markColor: SUBAGENT_COLOR[line.status],
+    name: line.type,
+    ...timedMeta([words.statusWord[line.status], line.tool], lineTime(line, now), [abbreviated(line.tokens)]),
+    description: cut(line.task, ROW_DESCRIPTION_LIMIT),
+  })
+
+  const tokensWithCache = (line: SubagentLine): string =>
+    words.tokensWithCache(abbreviated(line.tokens + line.cachedTokens))
+
+  const subagentLine = (line: SubagentLine, now: number): string =>
+    `${'  '.repeat(line.depth)}${subagentRowText(line, now)}`
+
+  const subagentSummary = (lines: readonly SubagentLine[]): string => {
+    if (lines.length === 0) {
+      return ''
+    }
+
+    const counts = SUMMARY_ORDER.map(status => {
+      const count = lines.filter(line => line.status === status).length
+
+      return count === 0 ? null : words.statusCount[status](count)
+    })
+    const tokens = lines.reduce((total, line) => total + line.tokens, 0)
+
+    return metaOf([...counts, words.tokensTotal(abbreviated(tokens))])
+  }
+
+  const subagentGroups = (lines: readonly SubagentLine[]): SubagentGroup[] => {
+    const trees = treesOf(lines)
+    const active = trees.filter(tree => tree.some(isRunning)).flat()
+    const finished = trees.filter(tree => !tree.some(isRunning)).flat()
+
+    return [
+      { heading: words.inProgressHeading(active.length), lines: active },
+      { heading: words.finishedHeading(finished.length), lines: finished },
+    ].filter(({ lines: group }) => group.length > 0)
+  }
+
+  const subagentTree = (header: string | null, lines: readonly SubagentLine[], now: number): string =>
+    [...(header === null ? [] : [header]), ...lines.map(line => subagentLine(line, now))].join('\n')
+
+  const sessionAgent = (session: OtherSession): string =>
+    session.agent === null ? words.noAgentLabel : `@${session.agent}`
+
+  const sessionSubagentCount = (session: OtherSession): string => words.subagentCount(session.subagents.length)
+
+  const sessionClock = (session: OtherSession): ClockProps | null => {
+    if (session.presence === 'working') {
+      return session.turnStartedAt === null ? null : { kind: 'elapsed', since: session.turnStartedAt }
+    }
+
+    if (session.presence === 'idle') {
+      return session.idleSince === undefined ? null : agoFrom(session.idleSince)
+    }
+
+    return agoFrom(session.updatedAt)
+  }
+
+  const sessionTime = (session: OtherSession, now: number): Timed | null => {
+    const props = sessionClock(session)
+
+    return props === null ? null : { text: timeText(props, now), props }
+  }
+
+  const sessionLine = (session: OtherSession, now: number): string =>
+    [
+      session.cwd,
+      sessionAgent(session),
+      words.presenceWord[session.presence],
+      sessionSubagentCount(session),
+      sessionTime(session, now)?.text ?? null,
+    ]
+      .filter(part => part !== null)
+      .join('  ')
+
+  const sessionSummary = (session: OtherSession): string => {
+    const answer = cut(unmarked(session.lastAnswer ?? ''), ROW_DESCRIPTION_LIMIT)
+
+    return [session.subagents.length === 0 ? null : sessionSubagentCount(session), answer === '' ? session.cwd : answer]
+      .filter(part => part !== null)
+      .join(META_SEPARATOR)
+  }
+
+  const sessionRow = (session: OtherSession, now: number): RowParts => ({
+    mark: '●',
+    markColor: PRESENCE_COLOR[session.presence],
+    name: sessionName(session),
+    ...timedMeta([sessionAgent(session), words.presenceWord[session.presence]], sessionTime(session, now), []),
+    description: sessionSummary(session),
+    isDim: isEnded(session),
+  })
+
+  const sessionGroups = (sessions: readonly OtherSession[]): SessionGroup[] => {
+    const sorted = [...sessions].sort(byPresenceThenNewest)
+    const open = sorted.filter(session => !isEnded(session))
+    const ended = sorted.filter(isEnded)
+
+    return [
+      { heading: words.openHeading(open.length), sessions: open },
+      { heading: words.endedHeading(ended.length), sessions: ended },
+    ].filter(({ sessions: group }) => group.length > 0)
+  }
+
+  const otherSessions = (sessions: readonly OtherSession[], now: number): string =>
+    [words.otherSessionsHeading(sessions.length), ...sessions.map(session => `  ${sessionLine(session, now)}`)].join(
+      '\n',
+    )
+
+  const sessionHeader = (status: string | null): string =>
+    status === null ? words.sessionWithoutAgent : words.sessionAsAgent(status)
+
+  const catalogRow = (agent: CatalogAgent): RowParts => ({
+    mark: '●',
+    markColor: agentColor(agent.color),
+    name: agent.name,
+    meta: metaOf([
+      words.sourceLabel[agent.source],
+      agent.model === undefined ? words.sessionModel : words.modelLabel(agent.model),
+      agent.tools === undefined ? null : words.toolCount(agent.tools.length),
+      agent.isActive ? words.activeLabel : null,
+    ]),
+    description: cut(agent.description),
+  })
+
+  const promptLines = (prompt: string): string => words.promptLines(prompt.trimEnd().split(NEWLINE).length)
+
+  const earlierLabel = (earlier: readonly Exchange[]): string => {
+    const answers = earlier.filter(({ kind }) => kind === 'answer').length
+
+    return answers === 0 ? words.earlierMessages(earlier.length) : words.earlierAnswers(answers)
+  }
+
+  const stopRequested = (type: string, detail: string): string => words.stopRequested(type, toastDetail(detail))
+
+  const stopFailed = (type: string, reason: string): string => words.stopFailed(type, toastDetail(reason))
+
+  const sessionTarget = (session: OtherSession): string => words.sessionTarget(session.cwd)
+
+  const messageFailed = (target: string, reason: string): string => words.messageFailed(target, toastDetail(reason))
+
+  const publishedSubagentText = (subagent: PublishedSubagent): string =>
+    [
+      statusLabel(subagent.status),
+      subagent.type,
+      cut(subagent.task, TASK_LIMIT),
+      subagent.tool ?? NO_TOOL,
+      abbreviated(subagent.tokens),
+    ].join('  ')
+
+  const footerSummary = ({ agent, running, peers }: FooterFacts): string =>
+    [
+      agentStatus(agent) ?? '',
+      running === 0 ? '' : words.footerRunning(running),
+      peers === 0 ? '' : words.footerPeers(peers),
+    ]
+      .filter(part => part !== '')
+      .join(FOOTER_SEPARATOR)
+
+  return {
+    COMMAND_DESCRIPTION: words.commandDescription,
+    COMMAND_ARGUMENT_HINT: words.commandArgumentHint,
+    noAgentsFound: words.noAgentsFound,
+    catalogList,
+    activeSummary,
+    reloaded,
+    activeFileGone: words.activeFileGone,
+    unknownAgent,
+    activatedBeforeStart: words.activatedBeforeStart,
+    activatedAfterStart: words.activatedAfterStart,
+    activatedWithoutNotice: words.activatedWithoutNotice,
+    deactivatedBeforeStart: words.deactivatedBeforeStart,
+    deactivatedAfterStart: words.deactivatedAfterStart,
+    deactivatedWithoutNotice: words.deactivatedWithoutNotice,
+    modelChanges: words.modelChanges,
+    modelReturns: words.modelReturns,
+    alreadyOff: words.alreadyOff,
+    nativeSession,
+    droppedForNative: words.droppedForNative,
+    unresolvedModel: words.unresolvedModel,
+    unappliedField: words.unappliedField,
+    unknownEffort,
+    unknownDefaultAgent: words.unknownDefaultAgent,
+    statusLine,
+    agentStatus,
+    AGENTS_COMMAND_DESCRIPTION: words.agentsCommandDescription,
+    AGENTS_ARGUMENT_HINT: words.agentsArgumentHint,
+    subagentRowText,
+    subagentRow,
+    tokensWithCache,
+    noSubagents: words.noSubagents,
+    subagentSummary,
+    subagentGroups,
+    agentInForce: words.agentInForce,
+    subagentTree,
+    noOtherSessions: words.noOtherSessions,
+    sessionName,
+    sessionRow,
+    sessionGroups,
+    otherSessions,
+    agentsUsage: words.agentsUsage,
+    PANE_TITLE: words.paneTitle,
+    panelOpened: words.panelOpened,
+    panelOpenedOnSessions: words.panelOpenedOnSessions,
+    TAB_LABELS: words.tabLabels,
+    sessionHeader,
+    panelOpenedOnAgents: words.panelOpenedOnAgents,
+    catalogUnreadable: words.catalogUnreadable,
+    launcherOff: words.launcherOff,
+    catalogHeading: words.catalogHeading,
+    agentColor,
+    catalogRow,
+    USE_LABEL: words.useLabel,
+    CONFIRM_LABEL: words.confirmLabel,
+    catalogSkipped: words.skippedNotice,
+    SWITCH_LABEL: words.switchLabel,
+    OFF_OPTION_LABEL: words.offOptionLabel,
+    listHint: words.listHint,
+    detailHint: words.detailHint,
+    BACK_LABEL: words.backLabel,
+    STOP_LABEL: words.stopLabel,
+    promptHeading: words.promptHeading,
+    answerHeading: words.answerHeading,
+    noAnswerYet: words.noAnswerYet,
+    noPrompt: words.noPrompt,
+    PROMPT_SHOW_LABEL: words.promptShowLabel,
+    PROMPT_HIDE_LABEL: words.promptHideLabel,
+    promptLines,
+    promptPreview,
+    earlierLabel,
+    youSaid: words.youSaid,
+    stopRequested,
+    stopFailed,
+    lastAnswerHeading: words.lastAnswerHeading,
+    noSharedAnswer: words.noSharedAnswer,
+    peerSubagentsHeading: words.peerSubagentsHeading,
+    noPeerSubagents: words.noPeerSubagents,
+    MESSAGE_PLACEHOLDER_SUBAGENT: words.messagePlaceholderSubagent,
+    MESSAGE_PLACEHOLDER_SESSION: words.messagePlaceholderSession,
+    SEND_LABEL: words.sendLabel,
+    STATUS_LABEL: words.statusLabel,
+    STATUS_REQUEST: words.statusRequest,
+    subagentTarget: words.subagentTarget,
+    sessionTarget,
+    messageSent: words.messageSent,
+    messageRelayed: words.messageRelayed,
+    messageFailed,
+    publishedSubagentText,
+    FOOTER_PANEL_LABEL: words.footerPanelLabel,
+    footerSummary,
+  }
 }
 
-export const footerSummary = ({ agent, running, peers }: FooterFacts): string => {
-  const status = agentStatus(agent)
+export type Messages = ReturnType<typeof messagesOver>
 
-  return [
-    status ?? '',
-    running === 0 ? '' : `${running} ${plural(running, 'subagente rodando', 'subagentes rodando')}`,
-    peers === 0 ? '' : `${peers} ${plural(peers, 'sessão ativa', 'sessões ativas')}`,
-  ]
-    .filter(part => part !== '')
-    .join(FOOTER_SEPARATOR)
-}
+const ENGLISH = messagesOver(en)
+
+const PORTUGUESE = messagesOver(ptBr)
+
+const isPortuguese = (language: unknown): boolean =>
+  typeof language === 'string' && PORTUGUESE_TAGS.includes(language.trim().toLowerCase())
+
+export const messagesIn = (language: unknown): Messages => (isPortuguese(language) ? PORTUGUESE : ENGLISH)

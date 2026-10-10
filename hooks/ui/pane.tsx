@@ -1,7 +1,7 @@
 import type { Elements, PaneOpenArgs, RenderElement, SessionSendResult, UiOpenResult, UiPane } from 'claude-code'
 
 import type { CatalogView, OtherSession, PaneTab, SubagentLine } from '../../types'
-import * as messages from '../messages'
+import type { Messages } from '../messages'
 import { SESSIONS_ARGUMENT, type Monitor } from '../monitor/index'
 import type { ClockPort, TimerPort } from '../monitor/registry'
 import { drawCatalogTab } from './tab-catalog'
@@ -9,7 +9,7 @@ import { drawPeers } from './tab-peers'
 import { drawSession } from './tab-session'
 
 export type PaneElements = Pick<Elements['mobile'], 'Box' | 'Text' | 'Button' | 'Markdown'> &
-  Partial<Pick<Elements['terminal'], 'Input' | 'Select'>>
+  Partial<Pick<Elements['terminal'], 'Input' | 'Select' | 'Client'>>
 
 export type StopOutcome = { isStopped: boolean; text: string }
 
@@ -50,13 +50,18 @@ export type Pane = {
   render: (host: PaneHost, elements: PaneElements, frame: PaneFrame) => Promise<RenderElement>
   takeover: (element: string | undefined, by: 'person' | 'plugin') => (() => void) | undefined
   closed: (host: PaneHost) => Promise<void>
+  changed: (host: PaneHost) => Promise<void>
 }
 
 export const PANE_ID = 'agent-studio'
 
 export const BEAT_MS = 2000
 
+export const TICK_MS = 5000
+
 const BACK_KEY = 'back'
+
+const SIDE_ROOM = 1
 
 const TABS: readonly PaneTab[] = [1, 2, 3]
 
@@ -64,6 +69,12 @@ const TAB_OF_ARGUMENT = new Map<string, PaneTab>([
   ['', 1],
   [SESSIONS_ARGUMENT, 2],
 ])
+
+type Faces = { structure: string; ticking: string }
+
+const structureOfLine = ({ tokens, tool, ...rest }: SubagentLine) => rest
+
+const structureOfSession = ({ updatedAt, turnStartedAt, ...rest }: OtherSession) => rest
 
 const attempt = async (work: () => Promise<void>) => {
   try {
@@ -116,7 +127,7 @@ const remember = async (host: PaneHost, { record }: Recipient, text: string) => 
   host.invalidate()
 }
 
-const deliver = async (host: PaneHost, recipient: Recipient, text: string) => {
+const deliver = async (host: PaneHost, messages: Messages, recipient: Recipient, text: string) => {
   if (text.trim() === '') {
     return
   }
@@ -140,13 +151,13 @@ const deliver = async (host: PaneHost, recipient: Recipient, text: string) => {
   await remember(host, recipient, text)
 }
 
-const subagentRecipient = (line: SubagentLine, record: Recipient['record']): Recipient => ({
+const subagentRecipient = (messages: Messages, line: SubagentLine, record: Recipient['record']): Recipient => ({
   to: { agentId: line.id },
   label: messages.subagentTarget(line.type),
   record,
 })
 
-const sessionRecipient = (session: OtherSession): Recipient => ({
+const sessionRecipient = (messages: Messages, session: OtherSession): Recipient => ({
   to: { sessionId: session.sessionId },
   label: messages.sessionTarget(session),
 })
@@ -164,7 +175,7 @@ const trackingPresses = (elements: PaneElements, drawn: Map<string, () => void>)
   },
 })
 
-export const createPane = (monitor: PaneMonitor): Pane => {
+export const createPane = (monitor: PaneMonitor, messages: Messages): Pane => {
   const readers: Record<PaneTab, (() => Promise<void>) | null> = {
     1: monitor.checkAgainstEngine,
     2: monitor.readOthers,
@@ -181,7 +192,8 @@ export const createPane = (monitor: PaneMonitor): Pane => {
   let beating: PaneHost | null = null
   let timer: TimerPort | null = null
   let holdsKeyboard = true
-  let drawnFace: string | null = null
+  let drawn: Faces | null = null
+  let askedAt: number | null = null
   let presses = new Map<string, () => void>()
 
   const stopTimer = () => {
@@ -200,10 +212,48 @@ export const createPane = (monitor: PaneMonitor): Pane => {
     return isOpen
   }
 
-  const faceAt = (now: number): string =>
-    tab === 1
-      ? JSON.stringify(monitor.lines().map(line => [line, messages.subagentRow(line, now).meta]))
-      : JSON.stringify(monitor.lastOthers().map(session => [session, messages.sessionRow(session, now).meta]))
+  const facesAt = (now: number): Faces | null => {
+    if (tab === 1) {
+      const lines = monitor.lines()
+
+      return {
+        structure: JSON.stringify(
+          lines.map(line => [structureOfLine(line), messages.subagentRow(line, now).ticking?.clock]),
+        ),
+        ticking: JSON.stringify(lines.map(({ tokens, tool }) => [tokens, tool])),
+      }
+    }
+
+    if (tab === 2) {
+      const sessions = monitor.lastOthers()
+
+      return {
+        structure: JSON.stringify(
+          sessions.map(session => [structureOfSession(session), messages.sessionRow(session, now).ticking?.clock]),
+        ),
+        ticking: '',
+      }
+    }
+
+    return null
+  }
+
+  const redrawIfChanged = (host: PaneHost, now: number) => {
+    const faces = facesAt(now)
+
+    if (faces === null) {
+      return
+    }
+
+    const isStructureNew = faces.structure !== drawn?.structure
+    const isTickDue = faces.ticking !== drawn?.ticking && (askedAt === null || now - askedAt >= TICK_MS)
+
+    if (isStructureNew || isTickDue) {
+      drawn = faces
+      askedAt = now
+      host.invalidate()
+    }
+  }
 
   const refresh = async (host: PaneHost) => {
     const read = readers[tab]
@@ -213,13 +263,7 @@ export const createPane = (monitor: PaneMonitor): Pane => {
     }
 
     await read()
-
-    const face = faceAt(await host.clock.now())
-
-    if (face !== drawnFace) {
-      drawnFace = face
-      host.invalidate()
-    }
+    redrawIfChanged(host, await host.clock.now())
   }
 
   const beat = () =>
@@ -248,7 +292,8 @@ export const createPane = (monitor: PaneMonitor): Pane => {
   }
 
   const show = (next: PaneTab) => {
-    drawnFace = null
+    drawn = null
+    askedAt = null
     tab = next
     pendingUse = null
     setOpenSubagent(null)
@@ -391,6 +436,7 @@ export const createPane = (monitor: PaneMonitor): Pane => {
 
     return drawSession(
       elements,
+      messages,
       {
         agentStatus: messages.agentStatus(monitor.agentInForce()),
         activeAgent: monitor.agentInForce()?.name ?? null,
@@ -414,7 +460,7 @@ export const createPane = (monitor: PaneMonitor): Pane => {
           showAndFocus(host, `sub-${left}`, `tab-${tab}`)
         },
         stop: line => stop(host, line),
-        send: (line, text) => deliver(host, subagentRecipient(line, recorderOf(line.id)), text),
+        send: (line, text) => deliver(host, messages, subagentRecipient(messages, line, recorderOf(line.id)), text),
         togglePrompt: () => {
           isPromptOpen = !isPromptOpen
           host.invalidate()
@@ -436,6 +482,7 @@ export const createPane = (monitor: PaneMonitor): Pane => {
 
     return drawPeers(
       elements,
+      messages,
       { sessions, open, now },
       {
         open: sessionId => {
@@ -448,8 +495,8 @@ export const createPane = (monitor: PaneMonitor): Pane => {
           openSession = null
           showAndFocus(host, `sess-${left}`, `tab-${tab}`)
         },
-        send: (session, text) => deliver(host, sessionRecipient(session), text),
-        status: session => deliver(host, sessionRecipient(session), messages.STATUS_REQUEST),
+        send: (session, text) => deliver(host, messages, sessionRecipient(messages, session), text),
+        status: session => deliver(host, messages, sessionRecipient(messages, session), messages.STATUS_REQUEST),
       },
     )
   }
@@ -457,6 +504,7 @@ export const createPane = (monitor: PaneMonitor): Pane => {
   const drawAgents = (elements: PaneElements, host: PaneHost) =>
     drawCatalogTab(
       elements,
+      messages,
       { hasLauncher: host.agents !== undefined, catalog, pendingUse },
       { use: name => useAgent(host, name) },
     )
@@ -486,10 +534,10 @@ export const createPane = (monitor: PaneMonitor): Pane => {
       const { Box, Text } = tracked
       const now = await host.clock.now()
       const tree = (
-        <Box flexDirection="column">
+        <Box flexDirection="column" paddingX={SIDE_ROOM} paddingBottom={1}>
           {drawTabs(tracked, host)}
           <Text dimColor wrap="truncate">
-            {'─'.repeat(columns)}
+            {'─'.repeat(Math.max(columns - 2 * SIDE_ROOM, 0))}
           </Text>
           <Box flexDirection="column" marginTop={1}>
             {drawBody(tracked, host, now)}
@@ -508,6 +556,12 @@ export const createPane = (monitor: PaneMonitor): Pane => {
       attempt(async () => {
         pendingUse = null
         await settle(host)
+      }),
+    changed: host =>
+      attempt(async () => {
+        if (timer !== null) {
+          redrawIfChanged(host, await host.clock.now())
+        }
       }),
   }
 }

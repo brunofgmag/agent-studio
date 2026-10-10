@@ -31,6 +31,7 @@ export type Summary = {
   model: string | null
   state: Exclude<PublishedState, 'ended'>
   turnStartedAt: number | null
+  idleSince?: number
   subagents: readonly BriefSubagent[]
   lastAnswer?: string
   title?: string
@@ -93,7 +94,7 @@ export const entryOf = (value: unknown): SessionEntry | null => {
     return null
   }
 
-  const { cwd, repo, agent, model, state, turnStartedAt, subagents, lastAnswer, title, updatedAt } = value
+  const { cwd, repo, agent, model, state, turnStartedAt, idleSince, subagents, lastAnswer, title, updatedAt } = value
   const briefs = Array.isArray(subagents) ? subagents.map(subagentOf) : null
 
   if (
@@ -119,6 +120,7 @@ export const entryOf = (value: unknown): SessionEntry | null => {
     turnStartedAt,
     subagents: briefs as PublishedSubagent[],
     updatedAt,
+    ...(typeof idleSince === 'number' ? { idleSince } : {}),
     ...(typeof lastAnswer === 'string' ? { lastAnswer } : {}),
     ...(typeof title === 'string' ? { title } : {}),
   }
@@ -136,14 +138,14 @@ const byRelevance = (a: BriefSubagent, b: BriefSubagent): number => {
 
 const presenceOf = (entry: SessionEntry, now: number): SessionPresence => {
   if (entry.state === 'ended') {
-    return 'encerrada'
+    return 'ended'
   }
 
   if (now - entry.updatedAt > INACTIVE_AFTER_MS) {
-    return 'inativa'
+    return 'stale'
   }
 
-  return entry.state === 'working' ? 'trabalhando' : 'ociosa'
+  return entry.state === 'working' ? 'working' : 'idle'
 }
 
 export const createRegistry = (options: RegistryOptions): Registry => {

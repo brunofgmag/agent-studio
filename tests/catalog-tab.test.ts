@@ -1,5 +1,6 @@
 import type { On, RenderSurface, UiOpenResult } from 'claude-code'
-import { type Engine, type Plugin, expect, mock, test } from 'claude-code/testing'
+import { type Engine, type Plugin, expect, mock } from 'claude-code/testing'
+import { test } from './in-portuguese'
 
 type Surface = 'terminal' | 'desktop'
 
@@ -169,7 +170,7 @@ const run = async ($: Engine, command: string, args = '') =>
 
 const as = ($: Engine, args = '') => run($, 'as', args)
 
-const agentes = ($: Engine, args = '') => run($, 'agentes', args)
+const agentPanel = ($: Engine, args = '') => run($, 'agent-panel', args)
 
 const mountPane = ($: Engine, surface: Surface) =>
   $.ui.mount({ plugin: 'agent-studio', surface, component: 'Pane', requestId: 'agent-studio', props: PANE_PROPS })
@@ -304,11 +305,11 @@ eachSurface('/as with an argument keeps answering as text and opens no panel', a
   expect(world.opens).toEqual([])
 })
 
-eachSurface('/agentes keeps opening on tab 1 and tab 3 is one press away', async (surface, $, on) => {
+eachSurface('/agent-panel keeps opening on tab 1 and tab 3 is one press away', async (surface, $, on) => {
   stage(on)
   await begin($)
 
-  expect(await agentes($)).toBe('Painel de agentes aberto.')
+  expect(await agentPanel($)).toBe('Painel de agentes aberto.')
 
   const ui = await mountPane($, surface)
 
@@ -492,7 +493,7 @@ eachSurface('tab 3 with only ignored files says no agent was found and counts th
 eachSurface('with the Launcher off tab 3 says so and tab 1 keeps its header', async (surface, $, on) => {
   stage(on)
   await begin($)
-  await agentes($)
+  await agentPanel($)
 
   const ui = await mountPane($, surface)
 
@@ -520,7 +521,7 @@ for (const frozen of [false, true]) {
 
     await as($, 'off')
     world.toasts.length = 0
-    await agentes($)
+    await agentPanel($)
 
     const ui = await mountPane($, surface)
 
@@ -636,7 +637,7 @@ const OPTIONS = [
 eachSurface('the tab 1 header carries a Select with the catalog names and desligar, the current value selected', async (surface, $, on) => {
   stage(on)
   await begin($)
-  await agentes($)
+  await agentPanel($)
 
   const ui = await mountPane($, surface)
   const select = await ui.find({ key: 'switch-agent' })
@@ -658,7 +659,7 @@ eachSurface('the tab 1 header carries a Select with the catalog names and deslig
 eachSurface('an agent named off does not repeat the value of desligar in the Select', async (surface, $, on) => {
   stage(on, { [pathOf('off')]: agentFile('off'), [pathOf('plain')]: agentFile('plain') })
   await begin($)
-  await agentes($)
+  await agentPanel($)
 
   const ui = await mountPane($, surface)
 
@@ -673,7 +674,7 @@ eachSurface('an active agent the reloaded catalog no longer lists leaves the Sel
   const world = stage(on)
   await begin($)
   await as($, 'worker')
-  await agentes($)
+  await agentPanel($)
 
   const ui = await mountPane($, surface)
 
@@ -703,7 +704,7 @@ eachSurface('picking an agent in the Select leaves the state /as leaves and toas
 
   await as($, 'off')
   world.toasts.length = 0
-  await agentes($)
+  await agentPanel($)
 
   const ui = await mountPane($, surface)
 
@@ -719,7 +720,7 @@ eachSurface('picking desligar in the Select turns the agent off like /as off', a
   const world = stage(on)
   await begin($)
   await as($, 'worker')
-  await agentes($)
+  await agentPanel($)
 
   const ui = await mountPane($, surface)
 
@@ -757,7 +758,7 @@ eachSurface('a native session draws no use button and no Select and says why on 
 test('a surface with no Select keeps the tab 1 header as it was, and tab 3 still lists and uses', async ($, on) => {
   const world = stage(on)
   await begin($)
-  await agentes($)
+  await agentPanel($)
 
   const ui = await mountMobile($)
 
@@ -775,7 +776,7 @@ test('a surface with no Select keeps the tab 1 header as it was, and tab 3 still
 eachSurface('the catalog is read when the panel opens and when tab 1 or tab 3 is chosen, and never by a beat', async (surface, $, on) => {
   const world = stage(on)
   await begin($)
-  await agentes($)
+  await agentPanel($)
 
   const ui = await mountPane($, surface)
   const names = async () => ((await ui.find({ key: 'switch-agent' }))?.props.options as { value: string }[]).map(option => option.value)
@@ -955,7 +956,7 @@ eachSurface('opening the panel again drops the pending confirmation', async (sur
   const { world, ui } = await openFrozen($, on, surface)
 
   await ui.press({ key: 'use-worker' })
-  await agentes($, 'agentes')
+  await agentPanel($, 'agent-panel')
   await as($)
 
   expect(await labelOf(ui, 'worker')).toBe('Usar')
@@ -1002,7 +1003,7 @@ eachSurface('the tab 1 Select activates at once and the warning arrives in the t
   const world = stage(on, MODEL_FILES)
   await begin($)
   await startTurn($)
-  await agentes($)
+  await agentPanel($)
 
   const ui = await mountPane($, surface)
 

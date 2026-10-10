@@ -1,8 +1,10 @@
 import type { On, SessionSendResult } from 'claude-code'
-import { type Engine, expect, mock, test } from 'claude-code/testing'
+import { type Engine, expect, mock } from 'claude-code/testing'
 
+import { messagesIn } from '../hooks/messages'
 import { type PaneElements, type PaneHost, createPane, isAutoModeRefusal, relayRequest } from '../hooks/ui/pane'
 import type { OtherSession, SessionEntry, SubagentLine } from '../types'
+import { test } from './in-portuguese'
 
 type Surface = 'terminal' | 'desktop'
 
@@ -132,10 +134,10 @@ const stage = (on: On, answer: Answer = DELIVERED): Stage => {
 
 const begin = ($: Engine) => $.session.start({ cwd: PROJECT, surface: null, isInteractive: true })
 
-const agentes = async ($: Engine, args = '') =>
+const agentPanel = async ($: Engine, args = '') =>
   (
     await $.command.run({
-      command: 'agentes',
+      command: 'agent-panel',
       args,
       origin: { kind: 'composer' },
       presentation: { isFullscreen: false, columns: 80 },
@@ -158,7 +160,7 @@ type Mounted = Awaited<ReturnType<typeof mountPane>>
 const subagentDetail = async ($: Engine, surface: Surface) => {
   await begin($)
   await spawn($)
-  await agentes($)
+  await agentPanel($)
 
   const ui = await mountPane($, surface)
 
@@ -169,7 +171,7 @@ const subagentDetail = async ($: Engine, surface: Surface) => {
 
 const sessionDetail = async ($: Engine, surface: Surface) => {
   await begin($)
-  await agentes($, 'sessoes')
+  await agentPanel($, 'sessions')
 
   const ui = await mountPane($, surface)
 
@@ -206,7 +208,7 @@ eachSurface('a subagent detail has a message field and no Status button, and the
   stage(on)
   await begin($)
   await spawn($)
-  await agentes($)
+  await agentPanel($)
 
   const ui = await mountPane($, surface)
 
@@ -227,7 +229,7 @@ eachSurface('a subagent detail has a message field and no Status button, and the
 eachSurface('a session detail has a message field and a Status button, and the list has neither', async (surface, $, on) => {
   stage(on)
   await begin($)
-  await agentes($, 'sessoes')
+  await agentPanel($, 'sessions')
 
   const ui = await mountPane($, surface)
 
@@ -440,7 +442,7 @@ test('a surface with no Input draws the session detail with Status and without a
   const world = stage(on)
 
   await begin($)
-  await agentes($, 'sessoes')
+  await agentPanel($, 'sessions')
 
   const ui = await $.ui.mount({
     plugin: 'agent-studio',
@@ -514,7 +516,7 @@ const nodeKeyed = (tree: unknown, key: string): Node | undefined => {
 test('a send that throws with the auto mode wording in its message is still no refusal to relay: toast, no prompt', async () => {
   const toasts: string[] = []
   const prompts: string[] = []
-  const session: OtherSession = { ...peer(), sessionId: 'peer-1', presence: 'trabalhando' }
+  const session: OtherSession = { ...peer(), sessionId: 'peer-1', presence: 'working' }
   const host: PaneHost = {
     surfaces: async () => ['terminal'],
     open: async () => ({ isPlaced: true }),
@@ -541,9 +543,9 @@ test('a send that throws with the auto mode wording in its message is still no r
     lastOthers: () => [session],
     readOthers: async () => undefined,
     sent: () => undefined,
-  })
+  }, messagesIn('pt-BR'))
 
-  await pane.command(host, 'sessoes', async () => '')
+  await pane.command(host, 'sessions', async () => '')
   await nodeKeyed(await pane.render(host, FAKE_ELEMENTS, FOCUSED), 'sess-peer-1')?.props?.onPress?.()
   await nodeKeyed(await pane.render(host, FAKE_ELEMENTS, FOCUSED), 'message-0')?.props?.onSubmit?.('hello')
 
@@ -557,7 +559,7 @@ const UNFOCUSED = { columns: 80, isFocused: false }
 
 const focusStage = (denied: readonly string[] = []) => {
   const focused: string[] = []
-  const session: OtherSession = { ...peer(), sessionId: 'peer-1', presence: 'trabalhando' }
+  const session: OtherSession = { ...peer(), sessionId: 'peer-1', presence: 'working' }
   const line: SubagentLine = {
     id: 'sub-1',
     type: 'Explore',
@@ -569,6 +571,7 @@ const focusStage = (denied: readonly string[] = []) => {
     status: 'running',
     tool: null,
     tokens: 0,
+    cachedTokens: 0,
     startedAt: NOW,
     endedAt: null,
     durationMs: null,
@@ -600,7 +603,7 @@ const focusStage = (denied: readonly string[] = []) => {
     lastOthers: () => [session],
     readOthers: async () => undefined,
     sent: () => undefined,
-  })
+  }, messagesIn('pt-BR'))
   const press = async (key: string) => {
     await nodeKeyed(await pane.render(host, FAKE_ELEMENTS, FOCUSED), key)?.props?.onPress?.()
     await Promise.resolve()
@@ -675,7 +678,7 @@ const openedSubagent = async ($: Engine, surface: Surface, answers: readonly str
     await complete($, 'agent-Explore', answer)
   }
 
-  await agentes($)
+  await agentPanel($)
 
   const ui = await mountPane($, surface)
 
@@ -753,7 +756,7 @@ eachSurface('messages typed in a session detail are recorded nowhere and its fie
   stage(on)
   await begin($)
   await spawn($)
-  await agentes($, 'sessoes')
+  await agentPanel($, 'sessions')
 
   const ui = await mountPane($, surface)
 
@@ -826,6 +829,7 @@ const SENT_LINE: SubagentLine = {
   status: 'completed',
   tool: null,
   tokens: 0,
+  cachedTokens: 0,
   startedAt: NOW,
   endedAt: NOW,
   durationMs: 0,
@@ -836,7 +840,7 @@ const SENT_LINE: SubagentLine = {
 
 const recordingStage = (send: PaneHost['send'], line: SubagentLine = SENT_LINE) => {
   const recorded: { agentId: string; text: string; at: number }[] = []
-  const session: OtherSession = { ...peer(), sessionId: 'peer-1', presence: 'trabalhando' }
+  const session: OtherSession = { ...peer(), sessionId: 'peer-1', presence: 'working' }
   const host: PaneHost = {
     surfaces: async () => ['terminal'],
     open: async () => ({ isPlaced: true }),
@@ -859,7 +863,7 @@ const recordingStage = (send: PaneHost['send'], line: SubagentLine = SENT_LINE) 
     sent: (agentId, text, at) => {
       recorded.push({ agentId, text, at })
     },
-  })
+  }, messagesIn('pt-BR'))
   const press = async (key: string) => {
     await nodeKeyed(await pane.render(host, FAKE_ELEMENTS, FOCUSED), key)?.props?.onPress?.()
   }
@@ -899,7 +903,7 @@ test('the pane tells the monitor about a delivered and a relayed message to a su
 test('the pane tells the monitor about nothing that is sent from a session detail, a message or a Status', async () => {
   const { pane, host, press, submit, recorded } = recordingStage(async () => ({ isDelivered: true }))
 
-  await pane.command(host, 'sessoes', async () => '')
+  await pane.command(host, 'sessions', async () => '')
   await press('sess-peer-1')
   await submit('message-0', 'to the session')
   await press('status')
@@ -970,4 +974,16 @@ test('the tab row leaves one row above it, so the focus ring of a tab is not cut
   await pane.command(host, '', async () => '')
 
   expect((parentOf(await pane.render(host, FAKE_ELEMENTS, FOCUSED), 'tab-1')?.props as { marginTop?: number }).marginTop).toBe(1)
+})
+
+test('the pane keeps one cell of room at the sides and under its content, and the rule is two cells shorter than the body', async () => {
+  const { host, pane } = focusStage()
+
+  await pane.command(host, '', async () => '')
+
+  const root = (await pane.render(host, FAKE_ELEMENTS, FOCUSED)) as unknown as Node & { props: Record<string, unknown> }
+  const rule = (root.children as Node[]).find(child => child.type === 'Text') as Node & { children: unknown }
+
+  expect([root.props.paddingX, root.props.paddingBottom]).toEqual([1, 1])
+  expect(String(rule.children)).toHaveLength(FOCUSED.columns - 2)
 })

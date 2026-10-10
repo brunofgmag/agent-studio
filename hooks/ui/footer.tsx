@@ -1,24 +1,22 @@
 import type { Elements, RenderElement } from 'claude-code'
 
-import type { SessionPresence } from '../../types'
-import * as messages from '../messages'
+import type { Messages } from '../messages'
 import type { Monitor } from '../monitor/index'
 
 export type FooterElements = Pick<Elements['mobile'], 'Box' | 'Button'>
 
 export type FooterMonitor = Pick<Monitor, 'runningCount' | 'agentInForce' | 'lastOthers'>
 
-const ACTIVE: readonly SessionPresence[] = ['trabalhando', 'ociosa']
-
-export const footerSummaryOf = (monitor: FooterMonitor): string =>
+export const footerSummaryOf = (monitor: FooterMonitor, messages: Messages): string =>
   messages.footerSummary({
     agent: monitor.agentInForce(),
     running: monitor.runningCount(),
-    peers: monitor.lastOthers().filter(({ presence }) => ACTIVE.includes(presence)).length,
+    peers: monitor.lastOthers().filter(({ presence }) => presence === 'working').length,
   })
 
 export const drawFooterButton = (
   { Box, Button }: FooterElements,
+  messages: Messages,
   below: RenderElement,
   openPanel: () => Promise<unknown>,
 ): RenderElement => (
