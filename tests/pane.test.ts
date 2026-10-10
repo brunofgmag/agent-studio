@@ -92,7 +92,7 @@ const stage = (on: On, surface: Surface, seed: Readonly<Record<string, unknown>>
   }
 
   mock.session(on)
-  mock.env(on, { USERPROFILE: 'C:\\Users\\bruno' })
+  mock.env(on, { USERPROFILE: 'C:\\Users\\dev' })
   on('session.cwd', () => ({ value: PROJECT }))
   on('session.root', () => ({ value: PROJECT }))
   on('session.repo', () => ({ value: null }))
@@ -1479,7 +1479,7 @@ eachSurface('a session row is named by its title when it has one and by the last
   stage(on, surface, {
     'sess:titled': entry({ cwd: 'C:/work/api', title: 'Fix the login bug', updatedAt: NOW - 1000 }),
     'sess:slash': entry({ cwd: 'C:/work/alpha', updatedAt: NOW - 2000 }),
-    'sess:back': entry({ cwd: 'C:\\Users\\bruno\\Projetos\\agent-studio-spike', updatedAt: NOW - 3000 }),
+    'sess:back': entry({ cwd: 'C:\\Users\\dev\\Projetos\\agent-studio-spike', updatedAt: NOW - 3000 }),
     'sess:trailing': entry({ cwd: 'C:\\work\\omega\\', updatedAt: NOW - 4000 }),
     'sess:empty-title': entry({ cwd: 'C:/work/zeta/', title: '', updatedAt: NOW - 5000 }),
   })

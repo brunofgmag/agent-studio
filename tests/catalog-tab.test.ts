@@ -44,7 +44,7 @@ const agentFile = (name: string, header = '', description = `${name} description
 
 const pathOf = (name: string) => `${PROJECT}/.claude/agents/${name}.md`
 
-const HOME_FILE = 'C:/Users/bruno/.claude/agents/home-only.md'
+const HOME_FILE = 'C:/Users/dev/.claude/agents/home-only.md'
 
 const DEFAULT_FILES: Readonly<Record<string, string>> = {
   [pathOf('plain')]: agentFile('plain'),
@@ -73,7 +73,7 @@ const stage = (on: On, files: Readonly<Record<string, string>> = DEFAULT_FILES):
     session: mock.session(on),
   }
 
-  mock.env(on, { USERPROFILE: 'C:\\Users\\bruno' })
+  mock.env(on, { USERPROFILE: 'C:\\Users\\dev' })
   on('session.cwd', () => ({ value: PROJECT }))
   on('session.root', () => ({ value: PROJECT }))
   on('session.repo', () => ({ value: null }))

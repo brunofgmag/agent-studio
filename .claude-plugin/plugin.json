@@ -2,7 +2,9 @@
   "name": "agent-studio",
   "version": "0.1.0",
   "description": "Run a session as an agent (/as) and watch agents and sessions in a panel",
-  "author": { "name": "Bruno" },
+  "author": {
+    "name": "Bruno Magalhães"
+  },
   "types": "./types/index.d.ts",
   "userConfig": {
     "enableLauncher": {

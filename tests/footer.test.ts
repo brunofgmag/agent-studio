@@ -62,7 +62,7 @@ const stage = (on: On, seed: Readonly<Record<string, unknown>> = {}): Stage => {
   }
 
   mock.session(on)
-  mock.env(on, { USERPROFILE: 'C:\\Users\\bruno' })
+  mock.env(on, { USERPROFILE: 'C:\\Users\\dev' })
   on('session.cwd', () => ({ value: PROJECT }))
   on('session.root', () => ({ value: PROJECT }))
   on('session.repo', () => ({ value: null }))

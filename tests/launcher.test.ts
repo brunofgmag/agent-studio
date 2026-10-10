@@ -48,7 +48,7 @@ type Stage = {
   session: ReturnType<typeof mock.session>
 }
 
-const HOME = { USERPROFILE: 'C:\\Users\\bruno' }
+const HOME = { USERPROFILE: 'C:\\Users\\dev' }
 const PROJECT = 'C:/work/app'
 const SESSION = 'session-1'
 const SESSION_MODEL = 'claude-haiku-5-5'
@@ -92,8 +92,8 @@ const DEFAULT_AGENTS: Agent[] = [
   { file: pathOf('lost'), text: agent('lost', 'model: gemini\n') },
   { file: pathOf('extras'), text: agent('extras', 'skills:\n  - vault-sweep\npermissionMode: plan\n') },
   { file: pathOf('plain'), text: agent('plain') },
-  { file: 'C:/Users/bruno/.claude/agents/worker.md', text: agent('worker', 'model: claude-sonnet-5-5\n') },
-  { file: 'C:/Users/bruno/.claude/agents/home-only.md', text: agent('home-only') },
+  { file: 'C:/Users/dev/.claude/agents/worker.md', text: agent('worker', 'model: claude-sonnet-5-5\n') },
+  { file: 'C:/Users/dev/.claude/agents/home-only.md', text: agent('home-only') },
 ]
 
 const stage = (on: On, setup: Setup = {}): Stage => {
@@ -1792,7 +1792,7 @@ const catalogHostOf = (files: readonly Agent[], listed: string[]): Host => {
   return {
     cwd: async () => PROJECT,
     root: async () => PROJECT,
-    home: async () => 'C:\\Users\\bruno',
+    home: async () => 'C:\\Users\\dev',
     list: async path => {
       const dir = slashed(path).replace(/\/$/, '')
 

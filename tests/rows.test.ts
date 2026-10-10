@@ -128,9 +128,9 @@ test('a session is named by its title, trimmed', () => {
 
 test('a session without a title, or with a blank one, is named by the last folder of its cwd on either separator, ignoring a trailing one', () => {
   expect(sessionName(session({ cwd: 'C:/work/api' }))).toBe('api')
-  expect(sessionName(session({ cwd: 'C:\\Users\\bruno\\Projetos\\agent-studio-spike' }))).toBe('agent-studio-spike')
+  expect(sessionName(session({ cwd: 'C:\\Users\\dev\\Projetos\\agent-studio-spike' }))).toBe('agent-studio-spike')
   expect(sessionName(session({ cwd: 'C:\\work\\omega\\' }))).toBe('omega')
-  expect(sessionName(session({ cwd: '/home/bruno/app/' }))).toBe('app')
+  expect(sessionName(session({ cwd: '/home/dev/app/' }))).toBe('app')
   expect(sessionName(session({ cwd: 'C:/work/api', title: '' }))).toBe('api')
   expect(sessionName(session({ cwd: 'C:/work/api', title: '   ' }))).toBe('api')
   expect(sessionName(session({ cwd: '/' }))).toBe('/')

@@ -22,7 +22,7 @@ const stage = (on: On) => {
   const world = { clock: mock.clock(on, { now: NOW }), ids: ['sub-1', 'sub-2', 'sub-3', 'sub-4'] }
 
   mock.session(on)
-  mock.env(on, { USERPROFILE: 'C:\\Users\\bruno' })
+  mock.env(on, { USERPROFILE: 'C:\\Users\\dev' })
   on('session.cwd', () => ({ value: PROJECT }))
   on('session.root', () => ({ value: PROJECT }))
   on('session.repo', () => ({ value: null }))

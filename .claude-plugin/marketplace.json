@@ -1,8 +1,10 @@
 {
-  "name": "agent-studio-local",
-  "owner": { "name": "Bruno" },
+  "name": "agent-studio",
+  "owner": {
+    "name": "Bruno Magalhães"
+  },
   "metadata": {
-    "description": "Local marketplace for agent-studio",
+    "description": "Run a Claude Code session as an agent and watch agents and sessions in a panel.",
     "version": "0.1.0"
   },
   "plugins": [
@@ -11,7 +13,9 @@
       "source": "./",
       "description": "Run a session as an agent (/as) and watch agents and sessions in a panel",
       "version": "0.1.0",
-      "author": { "name": "Bruno" }
+      "author": {
+        "name": "Bruno Magalhães"
+      }
     }
   ]
 }

@@ -2,108 +2,183 @@
 
 English | [Português](README.pt-BR.md)
 
-A Claude Code mods plugin, built for the Code tab of Claude Desktop on Windows. It does two things. The Launcher makes the session act as an agent from `.claude/agents`, which in a terminal would be `claude --agent architect`. The Monitor shows, in a panel, the session's subagents and the other sessions open on the machine.
+A Claude Code plugin for the Code tab of the Claude desktop app. It lets a session act as one of your agents from `.claude/agents`, and it shows the session's subagents and your other open sessions in a panel.
 
-It needs Claude Code 2.1.286 or newer in the Desktop app. The version shows in `/status`.
+![The panel on the This session tab, with two subagents running](docs/this-session.png)
 
-## Installation
+## What it does
 
-Install from a terminal, because `/plugin install` does not work inside a Code tab session.
+The plugin has two parts, and each can be turned off on its own.
 
-```bash
-claude plugin marketplace add C:/Users/bruno/Projetos/agent-studio
-```
+The Launcher adds `/as`. Typing `/as architect` makes the session act as the `architect` agent: its body becomes the system prompt, and its model, effort and tool restrictions apply to the main loop. In a terminal you would get the same with `claude --agent architect`. The desktop app has no such switch, so the plugin provides one.
 
-```bash
-claude plugin install agent-studio@agent-studio-local
-```
+The Monitor adds `/agent-panel` and a Panel button under the prompt. The panel lists the subagents of the session with their status, time and tokens. It also lists the other Claude Code sessions open on the machine, and the agents you can switch to.
 
-Sessions opened before the install only load the plugin after you restart the app.
+## What it is for
 
-## Launcher: `/as`
+Subagents in the desktop app run out of sight. You see that one started and you see its report when it ends. The panel shows which ones are still running, what each was asked and what it answered, and it lets you stop one or send it a message.
+
+Agents are the other half. If you keep roles in `.claude/agents` and use them in a terminal with `--agent`, the Launcher brings them to the Code tab, where a session can change role without being restarted.
+
+## The panel
+
+`/agent-panel` opens it, and so does the Panel button. It has three tabs, switched with `1`, `2` and `3`.
+
+### This session
+
+The first image shows this tab. Each subagent takes two lines. The first has a status mark, the subagent type, the tool in use, the time and the tokens. The second has the task it was given. The mark is blue while the subagent runs, green when it completes, red when it fails and grey when it is stopped.
+
+A summary at the top counts the subagents by status and adds up their tokens. Subagents that are running come first, under In progress, and the rest go under Finished.
+
+The token count leaves out cache reads. A subagent rereads its whole conversation from cache on every step, and adding those reads would make a short job look like millions of tokens. The detail shows the total with them.
+
+Pressing a row opens the subagent.
+
+![The detail of a running subagent](docs/subagent-detail.png)
+
+Back and Stop sit at the top. Below them are the model, the prompt the subagent was given (collapsed until you press `show all`), its last answer and a field to send it a message. Earlier answers and the messages you sent stay behind an `Earlier answers` button. The panel keeps the last 20 exchanges of each subagent until the session closes.
+
+### Other sessions
+
+This tab lists the other local sessions that load the plugin, split into Open and Ended. Each row has the session's title (or its folder name when it has none), its agent, its state and a time. For a session in the middle of a turn, the time is how long the turn has run. For an idle one, it is how long ago it stopped.
+
+Opening a session shows its last answer and its subagents. From there you can send it a message, or press Status to ask it for one line about what it is doing.
+
+### Agents
+
+![The Agents tab, listing the agent catalog](docs/agents-tab.png)
+
+The third tab lists the agents the plugin found. Use does what `/as name` does. An agent that declares a `color` in its file gets a dot of that color.
+
+When a conversation is already under way and the agent you pick runs on another model, the first press only shows a warning and turns the button into Confirm. The prompt cache is kept per model, so the next turn would read the whole conversation without it.
+
+## Under the prompt
+
+![The status text and the Panel button under the prompt](docs/footer.png)
+
+The status line shows the active agent, then how many subagents are running and how many other sessions are in the middle of a turn. Idle sessions are not counted. The Panel button beside it opens the panel.
+
+## The `/as` command
 
 | Command | What it does |
 | --- | --- |
 | `/as architect` | Activates the `architect` agent in the session |
-| `/as` | Opens the panel on the Agents tab; with no screen, lists the agents as text |
+| `/as` | Opens the panel on the Agents tab |
 | `/as ?` | Shows the active agent, with its model, effort and tools |
 | `/as off` | Goes back to the default behavior |
 | `/as --reload` | Reads the agent folders again |
 
 Agents come from the project's `.claude/agents`, from the working folder up to the repository root, and from `~/.claude/agents`. When two agents share a `name`, the project one wins.
 
-From the agent file the plugin applies the body (as the system prompt), `model`, `effort`, `tools`, `disallowedTools` and `initialPrompt`. The restrictions apply to the main loop only; subagents follow their own rules. An `Agent(researcher, implementer)` entry in `tools` limits the subagent types the session can start. The `initialPrompt` is sent once, right after an `/as name` you typed or after the Use button in this session, and never when the agent is restored.
+From the agent file the plugin applies the body, `model`, `effort`, `tools`, `disallowedTools` and `initialPrompt`. The restrictions apply to the main loop only, and subagents follow their own rules. An `Agent(researcher, implementer)` entry in `tools` limits the subagent types the session can start.
 
-The fields `mcpServers`, `hooks`, `permissionMode`, `memory`, `skills` and `maxTurns` are read and not applied. `/as` warns when the agent has any of them.
+The fields `mcpServers`, `hooks`, `permissionMode`, `memory`, `skills` and `maxTurns` are read and not applied. `/as` tells you when the agent has one of them.
 
-The chosen agent is stored per session and comes back after you reopen the app, after a `/clear` and after a resume. While it is active, the status line shows something like `@designer · claude-opus-5-5[1m] · xhigh`. With the Monitor on, the status line shows `@designer · 2 subagents running · 1 session working` and the Panel button sits beside it.
+The chosen agent is stored per session. It comes back after you reopen the app, after a `/clear` and after a resume.
 
-### Default agent per project
+### When the switch takes effect
 
-With `{ "agent": "architect" }` in the project settings, a new session starts as that agent. In a terminal Claude Code itself applies the key and the session is born as a native agent, so the plugin does nothing. An `/as off` outranks the default and still holds after you reopen the app.
+Claude Code builds the system prompt on the first turn of a conversation and rebuilds it only after a `/clear` or a compaction. So `/as` takes full effect when it is the first thing you type in a session.
 
-### Launcher limits
+With a conversation under way, the model, effort and tools change at once and the agent's instructions enter as a hidden message. The system prompt itself changes at the next `/clear` or compaction. The answer to `/as` says which of the two happened, and it warns you when the switch changes the model.
 
-The engine builds the system prompt on the first turn of the conversation and only rebuilds it after a `/clear` or a compaction. So `/as` takes full effect when it is the first thing in the session. With a conversation under way, the model, effort and tools change at once, the agent's instructions enter as a hidden message, and the system prompt only changes at the next `/clear` or the next compaction. The command's answer says which of the two cases happened. If the switch changes the main loop's model (with `/as name` or with `/as off`), the answer also carries a warning, because the API prompt cache is per model and the next turn rereads the whole conversation without cache.
+### Default agent for a project
 
-A session born with a native agent (`claude --agent`, or the `agent` settings key applied by Claude Code) stays outside the Launcher. In it, `/as` answers that the session already is that agent.
+With `{ "agent": "architect" }` in the project settings, a new session starts as that agent. `/as off` outranks the default and still holds after you reopen the app.
 
-A model declared by alias (`model: opus`) goes through the table in the Model aliases option. An alias missing from the table keeps the session's model, and `/as` warns.
+A session that was born as a native agent, with `claude --agent` or with that settings key applied by Claude Code itself in a terminal, stays outside the Launcher. In it, `/as` answers that the session already is that agent.
 
-## Monitor: `/agent-panel`
+## Install
 
-`/agent-panel` opens the Agents panel. Where there is no screen for the panel, the command answers the same information as text, and `/agent-panel sessions` does the same for the list of sessions.
+Run this in a shell. The desktop app's Terminal panel works:
 
-The panel has three tabs, switched with `1`, `2` and `3`.
+```sh
+claude plugin install agent-studio --marketplace brunofgmag/agent-studio
+```
 
-This session shows the session's subagents as a tree, each row with status, type, task, tool in use, duration and tokens. The token count leaves out cache reads, and the detail shows the total with them. The list starts with a summary line, with the count per status and the token total, and splits into In progress and Finished. Enter on a row opens the detail. At the top are Back and, while the subagent runs, Stop. Below come the header with the model, the prompt given, the conversation and a field to send the subagent a message. The prompt shows collapsed, and `show all` opens the full text. The conversation shows the last answer, and the earlier ones sit behind `Earlier answers`. Messages you send through that field show as `You: ...` among the answers. The panel keeps the last 20 exchanges of each subagent, and only until the session closes. The tab header has a selector to switch agents.
+It installs at the user scope. Sessions opened before the install load the plugin after you restart the app.
 
-Other sessions lists the sessions on the machine that run the plugin: folder, agent, state, number of subagents and a time that depends on the state. For a session working, the time is how long its current turn has run, as minutes and seconds. For an idle session, it is how long ago the session went idle: when its last turn ended, or when the session started, was cleared, resumed or forked. Sessions that stopped publishing (inactive) and ended ones show how long ago they last signaled. A session's detail shows its last answer, its subagents as read-only, a message field and the Status button, which asks the other session for one line about what it is doing. A session with no signal for 60 seconds shows as inactive, and an entry idle for 24 hours is deleted.
+From inside a terminal `claude` session you can type the slash command instead:
 
-Agents lists the catalog. The Use button on each row does what `/as name` does. When the conversation has already started and the agent changes the model, the first click shows the warning on the row and the button becomes Confirm; the second click activates the agent.
+```
+/plugin install agent-studio --marketplace brunofgmag/agent-studio
+```
 
-At the bottom of the prompt, beside the modes, the Panel button opens the panel. With an active agent, running subagents or other sessions with a turn running, the status line sums up the situation, for example `@designer · 2 subagents running · 1 session working`. The session count includes only sessions in the middle of a turn; idle sessions are not counted.
+Typing that slash command at the desktop app's prompt does not install anything. The app opens its plugin catalog, which does not list this repository.
 
-### Monitor limits
-
-In `auto` permission mode, Claude Code refuses a message that a plugin sends straight to another session or to a subagent. In that case the panel submits a request in the conversation for the model to send the message, with your text unchanged. In the `default` and `acceptEdits` modes the message goes straight through.
-
-Only local sessions that load the plugin appear. Cloud, WSL and VS Code sessions are left out.
-
-Each session publishes a summary in the plugin's storage, in `~/.claude/plugins/store/`. With the Share answers option on, the summary includes up to 300 characters of the last answer, which any other session on the machine can read.
+The plugin was written and tested on Claude Code 2.1.296, on Windows. It needs a build that loads plugin hooks modules.
 
 ## Options
 
 | Option | Default | Effect |
 | --- | --- | --- |
 | Launcher (`enableLauncher`) | on | Registers `/as` |
-| Monitor (`enableMonitor`) | on | Registers `/agent-panel`, the panel and the footer button |
-| Share answers (`shareAnswers`) | on | Publishes an excerpt of the last answer for the other sessions |
-| Model aliases (`modelAliases`) | `opus=claude-opus-5-5,sonnet=claude-sonnet-5-5,haiku=claude-haiku-5-5` | Maps an alias to a model id |
-| Language (`language`) | `en` | Language of the messages: `en` or `pt-BR` |
+| Monitor (`enableMonitor`) | on | Registers `/agent-panel`, the panel and the Panel button |
+| Share answers (`shareAnswers`) | on | Publishes an excerpt of the session's last answer for the other sessions |
+| Model aliases (`modelAliases`) | `opus=claude-opus-5-5,sonnet=claude-sonnet-5-5,haiku=claude-haiku-5-5` | Maps an alias such as `model: opus` to a model id |
+| Language (`language`) | `en` | Language of the texts: `en` or `pt-BR` |
+
+Claude Code stores plugin options in `~/.claude/settings.json`, under `pluginConfigs`:
+
+```json
+{
+  "pluginConfigs": {
+    "agent-studio@agent-studio": { "options": { "language": "pt-BR" } }
+  }
+}
+```
+
+In a terminal session, `/plugin` has a Configure options entry for the same values. You can also set one while installing, with `--config language=pt-BR`.
 
 With the Launcher and the Monitor both off, the plugin registers no hook and no command.
 
 ## Language
 
-The default is English. To see the messages, the panel and the command answers in Brazilian Portuguese, set the `language` option to `pt-BR`. The command names (`/as`, `/agent-panel`, `sessions`) are the same in both languages. An unknown value falls back to English. The option titles in this list stay in English, because `plugin.json` does not change with the language.
+The texts are in English by default and in Brazilian Portuguese with `language` set to `pt-BR`. The command names are the same in both. The option titles stay in English, because the plugin manifest cannot follow the option.
 
-## How to turn it off
+## Limits
 
-Disable the plugin in `/plugin`, in a terminal. For a single session, open Claude Code with `--safe-mode`.
+In `auto` permission mode, Claude Code refuses a message that a plugin sends straight to a subagent or to another session. The panel then submits a request in the conversation for the model to send it, with your text unchanged. In the `default` and `acceptEdits` modes the message goes straight through.
 
-## Development
+Only local sessions that load the plugin appear in the Other sessions tab. Cloud, WSL and VS Code sessions do not.
 
-```bash
-claude plugin test C:/Users/bruno/Projetos/agent-studio
+The desktop app rebuilds what a plugin drew every time that plugin, or any other, asks for a redraw, and a button under the pointer loses its highlight for an instant when that happens. The panel asks for a redraw only when something it shows has changed, and its clocks tick in a module of their own that needs none.
+
+After you reopen the app, the status line shows the agent again at your first prompt, not before.
+
+## Running from source
+
+```sh
+git clone https://github.com/brunofgmag/agent-studio.git
+claude --plugin-dir ./agent-studio
 ```
 
-```bash
-npx --prefix C:/Users/bruno/Projetos/agent-studio/dev --no-install tsc -p C:/Users/bruno/Projetos/agent-studio
+To load it in every session, including the desktop app's, put the folder's path in the `CLAUDE_CODE_PLUGIN_DIRS` environment variable. A plugin loaded this way is named `agent-studio@inline` in `pluginConfigs`.
+
+```sh
+claude plugin validate --strict .
+claude plugin test .
 ```
 
-```bash
-claude plugin validate --strict C:/Users/bruno/Projetos/agent-studio
+The first command checks the manifest and lists what the module hooks and calls. The second runs the tests in `tests/`, which use Claude Code's test kit and need neither a model nor a screen.
+
+For the type check, install the one development dependency and run TypeScript:
+
+```sh
+npm install --prefix dev
+npx --prefix dev --no-install tsc -p .
 ```
 
-The tests use the engine kit (`claude-code/testing`) and need neither a model nor a screen. The type check depends on `.claude-plugin/types/`, which Claude Code writes when an interactive session loads the plugin.
+The types come from `.claude-plugin/types/`, which Claude Code writes when an interactive session loads the plugin.
+
+## Privacy
+
+The plugin makes no network requests. It reads your agent files, the project settings and the events of the session it runs in.
+
+Each session writes a short summary to the plugin's storage in `~/.claude/plugins/store/`, so that your other sessions can list it: the folder, the agent, the state, the subagents and, with Share answers on, up to 300 characters of the last answer. Any session on the machine that loads the plugin can read it. An entry is deleted 24 hours after its session last wrote it.
+
+`claude plugin validate --strict .` prints the full list of calls the plugin makes.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -57,11 +57,11 @@ test('a project agent beats a user agent with the same name', async () => {
     hostOf({
       cwd: 'C:/work/app',
       root: 'C:/work/app',
-      home: 'C:\\Users\\bruno',
+      home: 'C:\\Users\\dev',
       files: {
         'C:/work/app/.claude/agents/a.md': agentFile('twin', 'model: claude-opus-5-5\n'),
-        'C:/Users/bruno/.claude/agents/b.md': agentFile('twin', 'model: claude-sonnet-5-5\n'),
-        'C:/Users/bruno/.claude/agents/c.md': agentFile('only-user'),
+        'C:/Users/dev/.claude/agents/b.md': agentFile('twin', 'model: claude-sonnet-5-5\n'),
+        'C:/Users/dev/.claude/agents/c.md': agentFile('only-user'),
       },
     }),
   )
@@ -76,7 +76,7 @@ test('a nearer project directory beats a farther one and nothing above the root 
     hostOf({
       cwd: 'C:/work/app/packages/ui',
       root: 'C:/work/app',
-      home: 'C:\\Users\\bruno',
+      home: 'C:\\Users\\dev',
       files: {
         'C:/work/app/packages/ui/.claude/agents/near.md': agentFile('twin', 'model: claude-opus-5-5\n'),
         'C:/work/app/.claude/agents/far.md': agentFile('twin', 'model: claude-sonnet-5-5\n'),
@@ -132,8 +132,8 @@ test('a missing directory is an empty directory', async () => {
     hostOf({
       cwd: 'C:/work/app/sub',
       root: 'C:/work/app',
-      home: 'C:\\Users\\bruno',
-      files: { 'C:/Users/bruno/.claude/agents/u.md': agentFile('u') },
+      home: 'C:\\Users\\dev',
+      files: { 'C:/Users/dev/.claude/agents/u.md': agentFile('u') },
     }),
   )
 
@@ -146,7 +146,7 @@ test('Windows backslash paths from the session are walked the same way', async (
     hostOf({
       cwd: 'C:\\work\\app\\mid\\sub',
       root: 'C:\\work\\app',
-      home: 'C:\\Users\\bruno',
+      home: 'C:\\Users\\dev',
       files: {
         'C:/work/app/mid/sub/.claude/agents/a.md': agentFile('inner'),
         'C:/work/app/mid/.claude/agents/m.md': agentFile('middle'),
@@ -161,10 +161,10 @@ test('Windows backslash paths from the session are walked the same way', async (
 test('a home that is also a project directory is scanned once, as project', async () => {
   const catalog = await loadCatalog(
     hostOf({
-      cwd: '/home/bruno',
-      root: '/home/bruno',
-      home: '/home/bruno',
-      files: { '/home/bruno/.claude/agents/a.md': agentFile('a') },
+      cwd: '/home/dev',
+      root: '/home/dev',
+      home: '/home/dev',
+      files: { '/home/dev/.claude/agents/a.md': agentFile('a') },
     }),
   )
 
@@ -188,17 +188,17 @@ test('findAgent matches the name field, not the file name', async () => {
 test('with the session at the project root nothing above it is read as a project', async () => {
   const underHome = await loadCatalog(
     hostOf({
-      cwd: 'C:/Users/bruno/Projetos',
-      root: 'C:/Users/bruno/Projetos',
-      home: 'C:/Users/bruno',
-      files: { 'C:/Users/bruno/.claude/agents/u.md': agentFile('mine') },
+      cwd: 'C:/Users/dev/Projetos',
+      root: 'C:/Users/dev/Projetos',
+      home: 'C:/Users/dev',
+      files: { 'C:/Users/dev/.claude/agents/u.md': agentFile('mine') },
     }),
   )
   const elsewhere = await loadCatalog(
     hostOf({
       cwd: 'C:/work/app',
       root: 'C:/work/app',
-      home: 'C:/Users/bruno',
+      home: 'C:/Users/dev',
       files: { 'C:/work/.claude/agents/x.md': agentFile('above') },
     }),
   )

@@ -4,18 +4,16 @@
 
 Plugin de mods para o Claude Code, feito para o Code tab do Claude Desktop no Windows. Ele faz duas coisas. O Launcher põe a sessão para atuar como um agente de `.claude/agents`, o que no terminal seria `claude --agent architect`. O Monitor mostra num painel os subagentes da sessão e as outras sessões abertas na máquina.
 
-Precisa do Claude Code 2.1.286 ou mais novo no Desktop. A versão aparece em `/status`.
+![O painel na aba This session, com dois subagentes rodando](docs/this-session.png)
+
+As imagens deste repositório mostram o plugin em inglês, que é o padrão. O plugin foi escrito e testado no Claude Code 2.1.296, no Windows.
 
 ## Instalação
 
-A instalação se faz num terminal, porque `/plugin install` não funciona dentro de uma sessão do Code tab.
+A instalação se faz num shell, e o painel Terminal do app serve. Digitar `/plugin install` no prompt do Code tab não instala nada.
 
-```bash
-claude plugin marketplace add C:/Users/bruno/Projetos/agent-studio
-```
-
-```bash
-claude plugin install agent-studio@agent-studio-local
+```sh
+claude plugin install agent-studio --marketplace brunofgmag/agent-studio
 ```
 
 Sessões abertas antes da instalação só carregam o plugin depois de reiniciar o app.
@@ -97,15 +95,15 @@ Desative o plugin em `/plugin`, num terminal. Para uma sessão só, abra o Claud
 ## Desenvolvimento
 
 ```bash
-claude plugin test C:/Users/bruno/Projetos/agent-studio
+claude plugin test .
 ```
 
 ```bash
-npx --prefix C:/Users/bruno/Projetos/agent-studio/dev --no-install tsc -p C:/Users/bruno/Projetos/agent-studio
+npx --prefix dev --no-install tsc -p .
 ```
 
 ```bash
-claude plugin validate --strict C:/Users/bruno/Projetos/agent-studio
+claude plugin validate --strict .
 ```
 
 Os testes usam o kit do motor (`claude-code/testing`) e não precisam de modelo nem de tela. A checagem de tipos depende de `.claude-plugin/types/`, que o Claude Code grava quando uma sessão interativa carrega o plugin.
