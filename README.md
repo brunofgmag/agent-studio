@@ -34,7 +34,7 @@ Do arquivo do agente o plugin aplica o corpo (como system prompt), `model`, `eff
 
 Os campos `mcpServers`, `hooks`, `permissionMode`, `memory`, `skills` e `maxTurns` são lidos e não aplicados. O `/as` avisa quando o agente tem algum deles.
 
-O agente escolhido fica guardado por sessão e volta depois de reabrir o app, de um `/clear` e de uma retomada. Enquanto ele está ativo, a linha de status mostra algo como `@designer · claude-opus-5-5[1m] · xhigh`.
+O agente escolhido fica guardado por sessão e volta depois de reabrir o app, de um `/clear` e de uma retomada. Enquanto ele está ativo, a linha de status mostra algo como `@designer · claude-opus-5-5[1m] · xhigh`. Com o Monitor ligado, a linha de status mostra `@designer · 2 subagentes rodando · 1 sessão ativa` e o botão Painel fica ao lado dela.
 
 ### Agente padrão por projeto
 
@@ -42,7 +42,7 @@ Com `{ "agent": "architect" }` no settings do projeto, uma sessão nova já come
 
 ### Limites do Launcher
 
-O motor monta o system prompt no primeiro turno da conversa e só o refaz depois de um `/clear` ou de uma compactação. Por isso o `/as` vale por inteiro quando é a primeira coisa da sessão. Com a conversa em curso, modelo, effort e ferramentas trocam na hora, as instruções do agente entram como uma mensagem oculta, e o system prompt só troca no próximo `/clear` ou na próxima compactação. A resposta do comando diz qual dos dois casos aconteceu.
+O motor monta o system prompt no primeiro turno da conversa e só o refaz depois de um `/clear` ou de uma compactação. Por isso o `/as` vale por inteiro quando é a primeira coisa da sessão. Com a conversa em curso, modelo, effort e ferramentas trocam na hora, as instruções do agente entram como uma mensagem oculta, e o system prompt só troca no próximo `/clear` ou na próxima compactação. A resposta do comando diz qual dos dois casos aconteceu. Se a troca muda o modelo do loop principal (com `/as nome` ou com `/as off`), a resposta traz também um aviso, porque o cache de prompt da API é por modelo e o próximo turno relê a conversa inteira sem cache.
 
 Sessão que já nasceu com um agente nativo (`claude --agent`, ou a chave `agent` do settings aplicada pelo Claude Code) fica fora do Launcher. Nela o `/as` responde que a sessão já é aquele agente.
 
@@ -54,13 +54,13 @@ Modelo declarado por apelido (`model: opus`) passa pela tabela da opção Apelid
 
 O painel tem três abas, que trocam com `1`, `2` e `3`.
 
-Esta sessão mostra os subagentes da sessão em árvore, cada linha com status, tipo, tarefa, ferramenta em uso, duração e tokens. Enter numa linha abre o detalhe, com o prompt dado, a resposta, um campo para mandar mensagem ao subagente e o botão Parar enquanto ele roda. No Desktop, uma linha do tempo com uma barra por subagente fica acima da árvore. O cabeçalho tem um seletor para trocar de agente.
+Esta sessão mostra os subagentes da sessão em árvore, cada linha com status, tipo, tarefa, ferramenta em uso, duração e tokens. A lista começa com uma linha de resumo, com a contagem por status e o total de tokens, e se divide em Em andamento e Terminados. Enter numa linha abre o detalhe. No topo ficam o Voltar e, enquanto o subagente roda, o Parar. Abaixo vêm o cabeçalho com o modelo, o prompt dado, a conversa e um campo para mandar mensagem ao subagente. O prompt aparece recolhido, e `mostrar tudo` abre o texto inteiro. A conversa mostra a última resposta, e as anteriores ficam atrás de `Respostas anteriores`. As mensagens que você manda por esse campo aparecem como `Você: ...` entre as respostas. O painel guarda as últimas 20 trocas de cada subagente, e só até a sessão fechar. O cabeçalho da aba tem um seletor para trocar de agente.
 
-Outras sessões lista as sessões da máquina que rodam o plugin: pasta, agente, estado, número de subagentes e última atividade. O detalhe de uma sessão mostra os subagentes dela só para leitura, um campo de mensagem e o botão Status, que pede à outra sessão uma linha sobre o que ela está fazendo. Uma sessão sem sinal há 60 segundos aparece como inativa, e uma entrada parada há 24 horas é apagada.
+Outras sessões lista as sessões da máquina que rodam o plugin: pasta, agente, estado, número de subagentes e última atividade. O detalhe de uma sessão mostra a última resposta dela, os subagentes só para leitura, um campo de mensagem e o botão Status, que pede à outra sessão uma linha sobre o que ela está fazendo. Uma sessão sem sinal há 60 segundos aparece como inativa, e uma entrada parada há 24 horas é apagada.
 
-Agentes lista o catálogo. O botão Usar nesta sessão faz o que `/as nome` faz.
+Agentes lista o catálogo. O botão Usar, em cada linha, faz o que `/as nome` faz. Quando a conversa já começou e o agente troca o modelo, o primeiro clique mostra o aviso na linha e o botão vira Confirmar; o segundo clique ativa o agente.
 
-Com um agente ativo, subagentes rodando ou outras sessões ativas, uma faixa acima do prompt resume a situação, e a tecla `1` com o prompt vazio abre o painel.
+No rodapé do prompt, ao lado dos modos, o botão Painel abre o painel. Com um agente ativo, subagentes rodando ou outras sessões ativas, a linha de status resume a situação, por exemplo `@designer · 2 subagentes rodando · 1 sessão ativa`.
 
 ### Limites do Monitor
 
@@ -75,7 +75,7 @@ Cada sessão publica um resumo no armazenamento do plugin, em `~/.claude/plugins
 | Opção | Padrão | Efeito |
 | --- | --- | --- |
 | Launcher (`enableLauncher`) | ligado | Registra o `/as` |
-| Monitor (`enableMonitor`) | ligado | Registra o `/agentes`, o painel e a faixa |
+| Monitor (`enableMonitor`) | ligado | Registra o `/agentes`, o painel e o botão do rodapé |
 | Compartilhar respostas (`shareAnswers`) | ligado | Publica o trecho da última resposta para as outras sessões |
 | Apelidos de modelo (`modelAliases`) | `opus=claude-opus-5-5,sonnet=claude-sonnet-5-5,haiku=claude-haiku-5-5` | Traduz apelido em id de modelo |
 

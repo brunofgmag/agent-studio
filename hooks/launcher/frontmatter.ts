@@ -146,6 +146,7 @@ export const parseAgentFile = (text: string): AgentFile => {
       ...optional('tools', listOf(fields.get('tools'))),
       ...optional('disallowedTools', listOf(fields.get('disallowedTools'))),
       ...optional('initialPrompt', scalarOf(fields.get('initialPrompt'))),
+      ...optional('color', scalarOf(fields.get('color'))),
       unapplied: UNAPPLIED_KEYS.filter(key => fields.has(key)),
     },
   }

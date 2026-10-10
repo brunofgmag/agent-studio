@@ -1,5 +1,5 @@
 import type { On, RenderSurface, UiOpenResult } from 'claude-code'
-import { type Engine, expect, mock, test } from 'claude-code/testing'
+import { type Engine, type Plugin, expect, mock, test } from 'claude-code/testing'
 
 type Surface = 'terminal' | 'desktop'
 
@@ -213,8 +213,30 @@ const eachSurface = (
 
 type Mounted = Awaited<ReturnType<typeof mountPane>> | Awaited<ReturnType<typeof mountMobile>>
 
-const rowTexts = async (ui: Mounted) =>
-  (await ui.findAll({ type: 'Text' })).map(text => text.text).filter(text => text.includes(' (projeto)') || text.includes(' (usuário)'))
+type CatalogRow = { mark: string; markColor: unknown; name: string; nameProps: Record<string, unknown>; meta: string; description: string }
+
+const ROW_TEXTS = 4
+
+const rowTexts = async (ui: Mounted): Promise<CatalogRow[]> => {
+  const texts = await ui.findAll({ type: 'Text' })
+  const first = texts.findIndex(text => text.text.startsWith('Agentes disponíveis ('))
+  const rows: CatalogRow[] = []
+
+  for (let at = first + 1; first >= 0 && at + ROW_TEXTS <= texts.length; at += ROW_TEXTS) {
+    const [mark, name, meta, description] = texts.slice(at, at + ROW_TEXTS)
+
+    rows.push({
+      mark: mark?.text ?? '',
+      markColor: mark?.props.color,
+      name: name?.text ?? '',
+      nameProps: name?.props ?? {},
+      meta: meta?.text ?? '',
+      description: description?.text ?? '',
+    })
+  }
+
+  return rows
+}
 
 const useKeys = async (ui: Mounted) =>
   (await ui.findAll({ type: 'Button' })).map(button => button.key).filter(key => key?.startsWith('use-'))
@@ -307,20 +329,20 @@ eachSurface('tab 3 draws one row per agent with the source, the model or the ses
   const ui = await mountPane($, surface)
 
   expect(await textOf(ui, 'Agentes disponíveis (4)')).toBe('Agentes disponíveis (4)')
-  expect(await rowTexts(ui)).toEqual([
-    'plain (projeto)  plain description  modelo da sessão  ferramentas: todas',
-    'starter (projeto)  starter description  modelo da sessão  ferramentas: todas',
-    'worker (projeto)  worker description  modelo: claude-opus-5-5[1m]  ferramentas: Read, Grep',
-    'home-only (usuário)  home-only description  modelo da sessão  ferramentas: todas',
+  expect((await rowTexts(ui)).map(({ mark, name, meta, description }) => [mark, name, meta, description])).toEqual([
+    ['●', 'plain', 'projeto · modelo da sessão', 'plain description'],
+    ['●', 'starter', 'projeto · modelo da sessão', 'starter description'],
+    ['●', 'worker', 'projeto · modelo: claude-opus-5-5[1m] · 2 ferramentas', 'worker description'],
+    ['●', 'home-only', 'usuário · modelo da sessão', 'home-only description'],
   ])
 
   const buttons = await ui.findAll({ type: 'Button' })
 
   expect(buttons.filter(button => button.key?.startsWith('use-')).map(button => button.text)).toEqual([
-    'Usar nesta sessão',
-    'Usar nesta sessão',
-    'Usar nesta sessão',
-    'Usar nesta sessão',
+    'Usar',
+    'Usar',
+    'Usar',
+    'Usar',
   ])
   await ui.unmount()
 })
@@ -334,9 +356,82 @@ eachSurface('tab 3 cuts a long description and marks the active agent with the w
   const ui = await mountPane($, surface)
   const rows = await rowTexts(ui)
 
-  expect(rows).toContain(`verbose (projeto)  ${'a'.repeat(79)}…  modelo da sessão  ferramentas: todas`)
-  expect(rows).toContain('worker (projeto)  ativo  worker description  modelo: claude-opus-5-5[1m]  ferramentas: Read, Grep')
-  expect(rows.filter(row => row.includes('  ativo  '))).toHaveLength(1)
+  expect(rows.find(row => row.name === 'verbose')?.description).toBe(`${'a'.repeat(79)}…`)
+  expect(rows.find(row => row.name === 'worker')?.meta).toBe('projeto · modelo: claude-opus-5-5[1m] · 2 ferramentas · ativo')
+  expect(rows.filter(row => row.meta.endsWith(' · ativo'))).toHaveLength(1)
+  await ui.unmount()
+})
+
+eachSurface('tab 3 colours the dot by the frontmatter colour, subtle when it is unknown or absent', async (surface, $, on) => {
+  stage(on, {
+    [pathOf('painted')]: agentFile('painted', 'color: red\n'),
+    [pathOf('odd')]: agentFile('odd', 'color: magenta\n'),
+    [pathOf('bare')]: agentFile('bare'),
+  })
+  await begin($)
+  await as($)
+
+  const ui = await mountPane($, surface)
+
+  expect(Object.fromEntries((await rowTexts(ui)).map(row => [row.name, row.markColor]))).toEqual({
+    bare: 'subtle',
+    odd: 'subtle',
+    painted: '#d1242f',
+  })
+
+  expect((await ui.find({ key: 'use-painted' }))?.text).toBe('Usar')
+  await ui.unmount()
+})
+
+type Node = { type?: string; props?: Record<string, unknown>; children?: Node[] }
+
+const rowColumnOf = async (ui: Mounted, name: string) =>
+  (await ui.findAll({ type: 'Box' })).find(
+    box =>
+      box.props.flexDirection === 'column' &&
+      box.children.length === 2 &&
+      (box.children[0] as Node).children?.some(child => child.type === 'Text' && JSON.stringify(child).includes(`"${name}"`)) === true,
+  )
+
+eachSurface('a catalog row with a button is the identity alone on line 1 and the button then the truncated description on line 2, with no space-between row', async (surface, $, on) => {
+  stage(on, { [pathOf('painted')]: agentFile('painted', 'color: red\n') })
+  await begin($)
+  await as($)
+
+  const ui = await mountPane($, surface)
+  const column = await rowColumnOf(ui, 'painted')
+  const [identity, action] = (column?.children ?? []) as Node[]
+
+  expect(identity?.props).toMatchObject({ flexDirection: 'row', gap: 1 })
+  expect(identity?.props?.justifyContent).toBeUndefined()
+  expect(identity?.children?.map(child => child.type)).toEqual(['Text', 'Text', 'Text'])
+  expect(identity?.children?.[2]?.props).toMatchObject({ dimColor: true, wrap: 'truncate' })
+  expect(action?.props).toMatchObject({ flexDirection: 'row', gap: 1 })
+  expect(action?.props?.paddingLeft).toBeUndefined()
+  expect(action?.children?.map(child => child.type)).toEqual(['Button', 'Text'])
+  expect(action?.children?.[0]?.props).toMatchObject({ key: 'use-painted', label: 'Usar' })
+  expect(action?.children?.[1]?.props).toMatchObject({ dimColor: true, wrap: 'truncate' })
+  expect(action?.children?.[1]?.children).toEqual(['painted description'])
+  expect((await ui.findAll({ type: 'Box' })).filter(box => box.props.justifyContent === 'space-between')).toEqual([])
+  await ui.unmount()
+})
+
+eachSurface('a catalog row without a button keeps the description under the identity, indented by 2', async (surface, $, on) => {
+  stage(on)
+  await begin($)
+  await $.classic.SessionStart({ source: 'startup', agent_type: 'architect' } as never)
+  await as($)
+
+  const ui = await mountPane($, surface)
+  const column = await rowColumnOf(ui, 'worker')
+  const [identity, description] = (column?.children ?? []) as Node[]
+
+  expect(identity?.children?.map(child => child.type)).toEqual(['Text', 'Text', 'Text'])
+  expect(description?.props).toMatchObject({ paddingLeft: 2 })
+  expect(description?.children?.map(child => child.type)).toEqual(['Text'])
+  expect(description?.children?.[0]?.props).toMatchObject({ dimColor: true, wrap: 'truncate' })
+  expect(description?.children?.[0]?.children).toEqual(['worker description'])
+  expect(await ui.find({ type: 'Button', text: 'Usar' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -412,7 +507,7 @@ eachSurface('with the Launcher off tab 3 says so and tab 1 keeps its header', as
 }, { enableLauncher: false })
 
 for (const frozen of [false, true]) {
-  eachSurface(`pressing use leaves the state /as leaves: prompt section, saved entry, status line and hidden notice${frozen ? ' after the first turn' : ''}`, async (surface, $, on) => {
+  eachSurface(`pressing use leaves the state /as leaves: prompt section, saved entry and hidden notice, and the same summary on the status line with the Monitor on${frozen ? ' after the first turn' : ''}`, async (surface, $, on) => {
     const world = stage(on)
     await begin($)
 
@@ -431,6 +526,11 @@ for (const frozen of [false, true]) {
 
     await ui.press({ key: 'tab-3' })
     await ui.press({ key: 'use-worker' })
+
+    if (frozen) {
+      expect(world.toasts).toEqual([])
+      await ui.press({ key: 'use-worker' })
+    }
 
     expect(await snapshotOf($, world)).toEqual(byCommand)
     expect(world.toasts).toEqual([answer])
@@ -496,7 +596,9 @@ eachSurface('after pressing use the row says ativo, the header names the agent a
 
   await ui.press({ key: 'use-worker' })
 
-  expect(await rowTexts(ui)).toContain('worker (projeto)  ativo  worker description  modelo: claude-opus-5-5[1m]  ferramentas: Read, Grep')
+  expect((await rowTexts(ui)).find(row => row.name === 'worker')?.meta).toBe(
+    'projeto · modelo: claude-opus-5-5[1m] · 2 ferramentas · ativo',
+  )
 
   await world.clock.advance(1000)
 
@@ -677,7 +779,7 @@ eachSurface('the catalog is read when the panel opens and when tab 1 or tab 3 is
 
   const ui = await mountPane($, surface)
   const names = async () => ((await ui.find({ key: 'switch-agent' }))?.props.options as { value: string }[]).map(option => option.value)
-  const rows = async () => (await rowTexts(ui)).map(row => row.split(' ')[0])
+  const rows = async () => (await rowTexts(ui)).map(row => row.name)
   const addAgent = async (name: string) => {
     world.files.set(pathOf(name), agentFile(name))
     await as($, '--reload')
@@ -711,5 +813,203 @@ eachSurface('the catalog read when the panel opens is already on the first drawi
   const ui = await mountPane($, surface)
 
   expect((await rowTexts(ui)).length).toBe(4)
+  await ui.unmount()
+})
+
+const SONNET = 'claude-sonnet-5-5'
+const OPUS = 'claude-opus-5-5[1m]'
+
+const MODEL_FILES: Readonly<Record<string, string>> = {
+  ...DEFAULT_FILES,
+  [pathOf('sonnet')]: agentFile('sonnet', `model: ${SONNET}\n`),
+}
+
+const changeLine = (from: string, to: string) =>
+  `O modelo muda de ${from} para ${to}. O próximo turno relê a conversa inteira sem cache.`
+
+const labelOf = async (ui: Mounted, name: string) => (await ui.find({ key: `use-${name}` }))?.text
+
+const descriptionOf = async (ui: Mounted, name: string) => (await rowTexts(ui)).find(row => row.name === name)?.description
+
+const openFrozen = async ($: Engine, on: On, surface: Surface) => {
+  const world = stage(on, MODEL_FILES)
+
+  await begin($)
+  await startTurn($)
+  await as($)
+
+  return { world, ui: await mountPane($, surface) }
+}
+
+eachSurface('the first press on an agent that switches the model asks to confirm and activates nothing', async (surface, $, on) => {
+  const { world, ui } = await openFrozen($, on, surface)
+  const before = await snapshotOf($, world)
+
+  await ui.press({ key: 'use-worker' })
+
+  expect(world.toasts).toEqual([])
+  expect(await snapshotOf($, world)).toEqual(before)
+  expect(await as($, '?')).toContain('Nenhum agente ativo')
+  expect(await labelOf(ui, 'worker')).toBe('Confirmar')
+  expect(await descriptionOf(ui, 'worker')).toBe(changeLine(SESSION_MODEL, OPUS))
+  expect(await labelOf(ui, 'sonnet')).toBe('Usar')
+  expect(await descriptionOf(ui, 'sonnet')).toBe('sonnet description')
+  await ui.unmount()
+})
+
+eachSurface('the second press activates with the warning in the toast and the row goes back to Usar', async (surface, $, on) => {
+  const { world, ui } = await openFrozen($, on, surface)
+
+  await ui.press({ key: 'use-worker' })
+  await ui.press({ key: 'use-worker' })
+
+  expect(world.toasts).toHaveLength(1)
+  expect(world.toasts[0]?.split('\n')[1]).toBe(changeLine(SESSION_MODEL, OPUS))
+  expect(world.store.get(`launcher:${SESSION}`)).toMatchObject({ agent: { name: 'worker' } })
+  expect(await labelOf(ui, 'worker')).toBe('Usar')
+  expect(await descriptionOf(ui, 'worker')).toBe('worker description')
+
+  await ui.press({ key: 'use-sonnet' })
+
+  expect(world.toasts).toHaveLength(1)
+  expect(await labelOf(ui, 'sonnet')).toBe('Confirmar')
+  expect(await descriptionOf(ui, 'sonnet')).toBe(changeLine(OPUS, SONNET))
+  await ui.unmount()
+})
+
+eachSurface('pressing another row moves the pending, and a row with no model switch activates at once and clears it', async (surface, $, on) => {
+  const { world, ui } = await openFrozen($, on, surface)
+
+  await ui.press({ key: 'use-worker' })
+  await ui.press({ key: 'use-sonnet' })
+
+  expect(world.toasts).toEqual([])
+  expect(await labelOf(ui, 'worker')).toBe('Usar')
+  expect(await labelOf(ui, 'sonnet')).toBe('Confirmar')
+
+  await ui.press({ key: 'use-worker' })
+
+  expect(world.toasts).toEqual([])
+  expect(await labelOf(ui, 'worker')).toBe('Confirmar')
+  expect(await labelOf(ui, 'sonnet')).toBe('Usar')
+
+  await ui.press({ key: 'use-plain' })
+
+  expect(world.toasts).toHaveLength(1)
+  expect(world.toasts[0]).toContain('Agente plain ativo.')
+  expect(world.toasts[0]).not.toContain('O modelo muda')
+  expect(await labelOf(ui, 'worker')).toBe('Usar')
+
+  await ui.press({ key: 'use-worker' })
+
+  expect(world.toasts).toHaveLength(1)
+  expect(await labelOf(ui, 'worker')).toBe('Confirmar')
+  await ui.unmount()
+})
+
+eachSurface('before the first prompt one press activates, whatever the model', async (surface, $, on) => {
+  const world = stage(on, MODEL_FILES)
+  await begin($)
+  await as($)
+
+  const ui = await mountPane($, surface)
+
+  await ui.press({ key: 'use-worker' })
+
+  expect(world.toasts).toEqual(['Agente worker ativo.'])
+  await ui.unmount()
+})
+
+eachSurface('a conversation that starts with the tab already open still asks to confirm', async (surface, $, on) => {
+  const world = stage(on, MODEL_FILES)
+  await begin($)
+  await as($)
+
+  const ui = await mountPane($, surface)
+
+  await startTurn($)
+  await ui.press({ key: 'use-worker' })
+
+  expect(world.toasts).toEqual([])
+  expect(await labelOf(ui, 'worker')).toBe('Confirmar')
+  await ui.unmount()
+})
+
+eachSurface('changing tab drops the pending confirmation', async (surface, $, on) => {
+  const { world, ui } = await openFrozen($, on, surface)
+
+  await ui.press({ key: 'use-worker' })
+  await ui.press({ key: 'tab-1' })
+  await ui.press({ key: 'tab-3' })
+
+  expect(await labelOf(ui, 'worker')).toBe('Usar')
+
+  await ui.press({ key: 'use-worker' })
+
+  expect(world.toasts).toEqual([])
+  expect(await labelOf(ui, 'worker')).toBe('Confirmar')
+  await ui.unmount()
+})
+
+eachSurface('opening the panel again drops the pending confirmation', async (surface, $, on) => {
+  const { world, ui } = await openFrozen($, on, surface)
+
+  await ui.press({ key: 'use-worker' })
+  await agentes($, 'agentes')
+  await as($)
+
+  expect(await labelOf(ui, 'worker')).toBe('Usar')
+
+  await ui.press({ key: 'use-worker' })
+
+  expect(world.toasts).toEqual([])
+  await ui.unmount()
+})
+
+const CLOSER: Plugin = {
+  name: 'closer',
+  register(on) {
+    on('command.run', { command: 'close-pane' }, async $ => {
+      await $.ui.close({ id: 'agent-studio' })
+
+      return { text: 'closed' }
+    })
+  },
+}
+
+for (const surface of SURFACES) {
+  test(`closing the panel drops the pending confirmation [${surface}]`, { plugins: [CLOSER] }, async ($, on) => {
+    const { world, ui } = await openFrozen($, on, surface)
+
+    await ui.press({ key: 'use-worker' })
+    await run($, 'close-pane')
+
+    await ui.unmount()
+
+    const again = await mountPane($, surface)
+
+    expect(world.panes).toEqual([])
+    expect(await labelOf(again, 'worker')).toBe('Usar')
+
+    await again.press({ key: 'use-worker' })
+
+    expect(world.toasts).toEqual([])
+    await again.unmount()
+  })
+}
+
+eachSurface('the tab 1 Select activates at once and the warning arrives in the toast', async (surface, $, on) => {
+  const world = stage(on, MODEL_FILES)
+  await begin($)
+  await startTurn($)
+  await agentes($)
+
+  const ui = await mountPane($, surface)
+
+  await ui.select({ key: 'switch-agent', value: 'worker' })
+
+  expect(world.toasts).toHaveLength(1)
+  expect(world.toasts[0]?.split('\n')[1]).toBe(changeLine(SESSION_MODEL, OPUS))
+  expect(world.store.get(`launcher:${SESSION}`)).toMatchObject({ agent: { name: 'worker' } })
   await ui.unmount()
 })

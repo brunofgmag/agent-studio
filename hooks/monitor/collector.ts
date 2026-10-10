@@ -1,6 +1,6 @@
 import type { AgentInfo, AgentSpawnInput, ModelUsage, TurnCompleteReason } from 'claude-code'
 
-import type { SubagentLine, SubagentRow, SubagentStatus } from '../../types'
+import type { Exchange, SubagentLine, SubagentRow, SubagentStatus } from '../../types'
 
 export type SpawnFacts = Pick<AgentSpawnInput, 'subagentType' | 'description' | 'prompt' | 'parentAgentId' | 'background'>
 
@@ -20,6 +20,7 @@ export type Collector = {
   toolFinished: (agentId: string, tool: string) => void
   stepUsed: (agentId: string, usage: ModelUsage | null | undefined) => void
   turnCompleted: (facts: CompletionFacts, at: number) => void
+  sent: (agentId: string, text: string, at: number) => void
   reconcile: (listed: readonly AgentInfo[], at: number) => void
   clear: () => void
   lines: () => SubagentLine[]
@@ -35,6 +36,8 @@ type Tracked = {
 }
 
 export const LINE_LIMIT = 200
+
+export const EXCHANGE_LIMIT = 20
 
 const STATUS_OF_REASON: Record<TurnCompleteReason, SubagentStatus> = {
   aborted: 'stopped',
@@ -67,6 +70,7 @@ const blankRow = (id: string, startedAt: number): SubagentRow => ({
   endedAt: null,
   durationMs: null,
   answer: '',
+  exchanges: [],
 })
 
 const trackedOf = (row: SubagentRow): Tracked => ({ row, earlierTokens: 0, runTokens: 0, earlierMs: 0, tools: [] })
@@ -74,6 +78,10 @@ const trackedOf = (row: SubagentRow): Tracked => ({ row, earlierTokens: 0, runTo
 const refresh = (tracked: Tracked) => {
   tracked.row.tokens = tracked.earlierTokens + tracked.runTokens
   tracked.row.tool = tracked.tools.at(-1) ?? null
+}
+
+const record = (tracked: Tracked, exchange: Exchange) => {
+  tracked.row.exchanges = [...tracked.row.exchanges, exchange].slice(-EXCHANGE_LIMIT)
 }
 
 const reopen = (tracked: Tracked) => {
@@ -225,8 +233,20 @@ export const createCollector = (): Collector => {
       tracked.runTokens = 0
       tracked.earlierMs += facts.durationMs
       tracked.row.answer = facts.answer
+
+      if (facts.answer !== '') {
+        record(tracked, { kind: 'answer', text: facts.answer, at })
+      }
+
       finish(tracked, STATUS_OF_REASON[facts.reason], at, tracked.earlierMs)
       trim()
+    },
+    sent: (agentId, text, at) => {
+      const tracked = records.get(agentId)
+
+      if (tracked !== undefined) {
+        record(tracked, { kind: 'sent', text, at })
+      }
     },
     reconcile: (listed, at) => {
       for (const info of listed) {

@@ -11,6 +11,7 @@ import {
   toolDenial,
 } from '../hooks/launcher/apply'
 import { type Host, createLauncher } from '../hooks/launcher/index'
+import * as messages from '../hooks/messages'
 import type { AgentDefinition, ProcessFlags, SavedSession } from '../types'
 
 type Agent = { file: string; text: string }
@@ -1015,7 +1016,7 @@ test('the effort word is matched without regard to case', async ($, on) => {
   expect(await stepEffortOf($, world)).toBe('xhigh')
 })
 
-test('an effort outside the five words is not applied, and /as says so', async ($, on) => {
+test('an effort outside the five words is not applied, and /as says so', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { agents: WITH_EXTRAS })
   await begin($)
 
@@ -1025,7 +1026,7 @@ test('an effort outside the five words is not applied, and /as says so', async (
   expect(text).toContain('low, medium, high, xhigh, max')
   expect(await stepEffortOf($, world, { effort: 'low' })).toBe('low')
   expect(await as($, '?')).toContain('Effort: o da sessão')
-  expect(world.statuses).toEqual(['@muddled'])
+  expect(world.statuses).toEqual(['@muddled', '@muddled'])
 })
 
 test('a valid effort adds no warning to /as', async ($, on) => {
@@ -1049,7 +1050,7 @@ test('/as ? shows the effort of the agent or says it is the session one', async 
   expect(await as($, '?')).toContain('Effort: o da sessão')
 })
 
-test('the status line is written on /as, replaced by the next agent and cleared by /as off', async ($, on) => {
+test('the status line is written on /as, replaced by the next agent and cleared by /as off', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { agents: WITH_EXTRAS })
   await begin($)
 
@@ -1064,7 +1065,7 @@ test('the status line is written on /as, replaced by the next agent and cleared 
   expect(world.statuses).toEqual([DESIGNER_LINE, '@plain', '@thinker · high', '@worker · claude-opus-5-5[1m]', undefined])
 })
 
-test('the status line shows the resolved model of an alias', async ($, on) => {
+test('the status line shows the resolved model of an alias', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on)
   await begin($)
   await as($, 'aliased')
@@ -1072,7 +1073,7 @@ test('the status line shows the resolved model of an alias', async ($, on) => {
   expect(world.statuses).toEqual(['@aliased · claude-sonnet-5-5'])
 })
 
-test('the status line is cleared when the session turns out to be native', async ($, on) => {
+test('the status line is cleared when the session turns out to be native', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { agents: WITH_EXTRAS })
   await begin($)
   await as($, 'designer')
@@ -1081,7 +1082,7 @@ test('the status line is cleared when the session turns out to be native', async
   expect(world.statuses).toEqual([DESIGNER_LINE, undefined])
 })
 
-test('the status line is cleared when the first turn shows the session is native', async ($, on) => {
+test('the status line is cleared when the first turn shows the session is native', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { agents: WITH_EXTRAS })
   await begin($)
   await as($, 'designer')
@@ -1090,28 +1091,74 @@ test('the status line is cleared when the first turn shows the session is native
   expect(world.statuses).toEqual([DESIGNER_LINE, undefined])
 })
 
-test('an agent restored from the store in a new process writes the status line with no /as', async ($, on) => {
+test('an agent restored from the store in a new process writes the status line with no /as', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { agents: WITH_EXTRAS, store: { [keyOf(SESSION)]: saved('designer') } })
   await begin($)
 
   expect(world.statuses).toEqual([DESIGNER_LINE])
 })
 
-test('a start with no agent to restore does not touch the status line', async ($, on) => {
+test('a restored agent has its status line written again at each turn start and by /as ?', { options: { enableMonitor: false } }, async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS, store: { [keyOf(SESSION)]: saved('designer') } })
+  await begin($)
+  await startTurn($)
+
+  expect(world.statuses).toEqual([DESIGNER_LINE, DESIGNER_LINE])
+
+  await as($, '?')
+
+  expect(world.statuses).toEqual([DESIGNER_LINE, DESIGNER_LINE, DESIGNER_LINE])
+})
+
+test('with the Monitor on /as, a replacement and /as off send the summary of the Monitor, and undefined when it is empty', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'designer')
+  await as($, 'thinker')
+  await as($, 'off')
+
+  expect(world.statuses).toEqual([DESIGNER_LINE, '@thinker · high', undefined])
+})
+
+test('with the Monitor on a restored agent sends the summary at the start, at a turn start and on /as ?', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS, store: { [keyOf(SESSION)]: saved('designer') } })
+  await begin($)
+
+  expect(world.statuses).toEqual([DESIGNER_LINE])
+
+  await startTurn($)
+
+  expect(world.statuses).toEqual([DESIGNER_LINE, DESIGNER_LINE])
+
+  await as($, '?')
+
+  expect(world.statuses).toEqual([DESIGNER_LINE, DESIGNER_LINE, DESIGNER_LINE])
+})
+
+test('with no agent in force a turn start and /as ? do not touch the status line', { options: { enableMonitor: false } }, async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await startTurn($)
+  await as($, '?')
+
+  expect(world.statuses).toEqual([])
+})
+
+test('a start with no agent to restore does not touch the status line', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { store: { [keyOf(SESSION)]: saved(null, 'architect') } })
   await begin($)
 
   expect(world.statuses).toEqual([])
 })
 
-test('a start that cannot restore the saved agent does not touch the status line', async ($, on) => {
+test('a start that cannot restore the saved agent does not touch the status line', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { store: { [keyOf(SESSION)]: saved('vanished') } })
   await begin($)
 
   expect(world.statuses).toEqual([])
 })
 
-test('a resume writes the status line for the agent of the session it enters and clears it when there is none', async ($, on) => {
+test('a resume writes the status line for the agent of the session it enters and clears it when there is none', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { agents: WITH_EXTRAS, store: { [keyOf('session-2')]: saved('thinker') } })
   await begin($)
   await as($, 'designer')
@@ -1126,7 +1173,7 @@ test('a resume writes the status line for the agent of the session it enters and
   expect(world.statuses).toEqual([DESIGNER_LINE, '@thinker · high', undefined])
 })
 
-test('a resume into a native session shows no status line for the agent saved beside it', async ($, on) => {
+test('a resume into a native session shows no status line for the agent saved beside it', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { agents: WITH_EXTRAS, store: { [keyOf('session-2')]: saved('designer', 'architect') } })
   await begin($)
   await as($, 'thinker')
@@ -1136,7 +1183,7 @@ test('a resume into a native session shows no status line for the agent saved be
   expect(world.statuses).toEqual(['@thinker · high', undefined])
 })
 
-test('a fork clears the status line when the new session has no agent', async ($, on) => {
+test('a fork clears the status line when the new session has no agent', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { agents: WITH_EXTRAS })
   await begin($)
   await as($, 'designer')
@@ -1146,7 +1193,7 @@ test('a fork clears the status line when the new session has no agent', async ($
   expect(world.statuses).toEqual([DESIGNER_LINE, undefined])
 })
 
-test('/as --reload rewrites the status line from the new file', async ($, on) => {
+test('/as --reload rewrites the status line from the new file', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { agents: WITH_EXTRAS })
   await begin($)
   await as($, 'designer')
@@ -1160,7 +1207,7 @@ test('/as --reload rewrites the status line from the new file', async ($, on) =>
   expect(await stepEffortOf($, world)).toBe('low')
 })
 
-test('/as off with no agent in force leaves the status line alone', async ($, on) => {
+test('/as off with no agent in force leaves the status line alone', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on)
   await begin($)
   await as($, 'off')
@@ -1290,7 +1337,7 @@ test('a classic SessionStart with an agent_type before session.start saves only 
   expect(await as($, '?')).toContain('já roda como o agente architect')
 })
 
-test('session.start keeps a native agent found before it when the saved entry carries none', async ($, on) => {
+test('session.start keeps a native agent found before it when the saved entry carries none', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { settings: { agent: 'plain' } })
   await $.classic.SessionStart({ source: 'startup', agent_type: 'architect' })
   world.store.delete(keyOf(SESSION))
@@ -1301,7 +1348,7 @@ test('session.start keeps a native agent found before it when the saved entry ca
   expect(world.statuses.filter(text => text !== undefined)).toEqual([])
 })
 
-test('a new session with the settings agent starts with it in force and saved, with no row, no toast and no submit', async ($, on) => {
+test('a new session with the settings agent starts with it in force and saved, with no row, no toast and no submit', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { agents: WITH_EXTRAS, settings: { agent: 'starter' } })
   await begin($)
 
@@ -1321,7 +1368,7 @@ test('the settings agent restricts tools and moves the model like a /as would', 
   expect(await as($, '?')).toContain('Agente ativo: restricted (projeto)')
 })
 
-test('a start without the agent key lists no folder and saves nothing', async ($, on) => {
+test('a start without the agent key lists no folder and saves nothing', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { settings: { model: 'opus' } })
   await begin($)
 
@@ -1347,7 +1394,7 @@ test('an empty agent key is ignored', async ($, on) => {
   expect(world.store.size).toBe(0)
 })
 
-test('/as off in a session with the settings agent is saved as the user choice', async ($, on) => {
+test('/as off in a session with the settings agent is saved as the user choice', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { settings: { agent: 'restricted' } })
   await begin($)
   await as($, 'off')
@@ -1356,7 +1403,7 @@ test('/as off in a session with the settings agent is saved as the user choice',
   expect(world.statuses).toEqual(['@restricted', undefined])
 })
 
-test('/as off survives a new process: the settings agent does not come back', async ($, on) => {
+test('/as off survives a new process: the settings agent does not come back', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, {
     settings: { agent: 'restricted' },
     store: { [keyOf(SESSION)]: { agent: null, native: null, at: 1, optedOut: true } },
@@ -1458,7 +1505,7 @@ test('a native entry saved for the session beats the settings agent and shows no
   expect(world.toasts).toEqual([])
 })
 
-test('a session that turns out native drops the settings agent in silence', async ($, on) => {
+test('a session that turns out native drops the settings agent in silence', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { settings: { agent: 'restricted' } })
   await begin($)
   await $.classic.SessionStart({ source: 'startup', agent_type: 'architect' })
@@ -1488,7 +1535,7 @@ test('the toast for an agent chosen by hand stays when the session turns out nat
   expect(world.toasts[0]).toContain('plain')
 })
 
-test('a settings agent missing from the catalog leaves the session without an agent, tells the user once and saves nothing', async ($, on) => {
+test('a settings agent missing from the catalog leaves the session without an agent, tells the user once and saves nothing', { options: { enableMonitor: false } }, async ($, on) => {
   const world = stage(on, { settings: { agent: 'ghost' } })
   await begin($)
 
@@ -1817,6 +1864,23 @@ test('catalogView lists the resolved catalog with the active one marked, counts 
   expect(listed.length).toBe(reads)
 })
 
+test('catalogView carries the frontmatter color and leaves it undefined when the file has none', async () => {
+  const host = catalogHostOf(
+    [
+      { file: pathOf('painted'), text: '---\nname: painted\ndescription: d\ncolor: green\n---\nx' },
+      { file: pathOf('bare'), text: '---\nname: bare\ndescription: d\n---\nx' },
+    ],
+    [],
+  )
+  const launcher = createLauncher({})
+
+  await launcher.start(host)
+
+  const view = await launcher.catalogView(host)
+
+  expect(Object.fromEntries(view.agents.map(item => [item.name, item.color]))).toEqual({ painted: 'green', bare: undefined })
+})
+
 test('catalogView reports the native name and marks no agent active in a native session', async () => {
   const host = catalogHostOf(DEFAULT_AGENTS, [])
   const launcher = createLauncher({})
@@ -1838,4 +1902,171 @@ test('catalogView of an empty catalog is an empty list with no skipped file', as
   await launcher.start(host)
 
   expect(await launcher.catalogView(host)).toEqual({ agents: [], skipped: 0, native: null })
+})
+
+const OPUS = 'claude-opus-5-5'
+const SONNET = 'claude-sonnet-5-5'
+
+const SWITCH_AGENTS: Agent[] = [
+  { file: pathOf('opus'), text: agent('opus', `model: ${OPUS}\n`) },
+  { file: pathOf('opus-twin'), text: agent('opus-twin', `model: ${OPUS}\n`) },
+  { file: pathOf('sonnet'), text: agent('sonnet', `model: ${SONNET}\n`) },
+  { file: pathOf('same'), text: agent('same', `model: ${SESSION_MODEL}\n`) },
+  { file: pathOf('bare'), text: agent('bare') },
+  { file: pathOf('lost'), text: agent('lost', 'model: gemini\n') },
+]
+
+const switchHostOf = (promptFrozen: boolean): Host => ({
+  ...catalogHostOf(SWITCH_AGENTS, []),
+  loadFlags: async () => ({ promptFrozen, composeSeen: promptFrozen }),
+})
+
+const switchLauncherOf = async (promptFrozen: boolean, ...before: string[]) => {
+  const host = switchHostOf(promptFrozen)
+  const launcher = createLauncher({})
+
+  await launcher.start(host)
+
+  for (const request of before) {
+    await launcher.command(host, request)
+  }
+
+  return { host, launcher }
+}
+
+const linesOf = (text: string) => text.split('\n')
+
+const changeLine = (from: string, to: string) =>
+  `O modelo muda de ${from} para ${to}. O próximo turno relê a conversa inteira sem cache.`
+
+const returnLine = (from: string, to: string) =>
+  `O modelo volta de ${from} para ${to}. O próximo turno relê a conversa inteira sem cache.`
+
+test('/as mid-conversation with another model warns right after the first line, from the session model', async () => {
+  const { host, launcher } = await switchLauncherOf(true)
+
+  const lines = linesOf(await launcher.command(host, 'opus'))
+
+  expect(lines[0]).toContain('Agente opus ativo.')
+  expect(lines[1]).toBe(changeLine(SESSION_MODEL, OPUS))
+  expect(lines).toHaveLength(2)
+})
+
+test('/as mid-conversation from an agent with a model warns from that model', async () => {
+  const { host, launcher } = await switchLauncherOf(true, 'opus')
+
+  expect(linesOf(await launcher.command(host, 'sonnet'))[1]).toBe(changeLine(OPUS, SONNET))
+})
+
+test('/as mid-conversation to an agent without a model warns with the session model as destination', async () => {
+  const { host, launcher } = await switchLauncherOf(true, 'opus')
+
+  expect(linesOf(await launcher.command(host, 'bare'))[1]).toBe(changeLine(OPUS, SESSION_MODEL))
+})
+
+test('/as mid-conversation that leaves the model as it is adds no line', async () => {
+  const fromNone = await switchLauncherOf(true)
+  const fromOpus = await switchLauncherOf(true, 'opus')
+  const fromBare = await switchLauncherOf(true, 'bare')
+  const fromLost = await switchLauncherOf(true)
+  const lostLines = linesOf(await fromLost.launcher.command(fromLost.host, 'lost'))
+
+  expect(await fromNone.launcher.command(fromNone.host, 'bare')).toBe(messages.activatedAfterStart('bare'))
+  expect(await fromNone.launcher.command(fromNone.host, 'same')).toBe(messages.activatedAfterStart('same'))
+  expect(await fromOpus.launcher.command(fromOpus.host, 'opus-twin')).toBe(messages.activatedAfterStart('opus-twin'))
+  expect(await fromOpus.launcher.command(fromOpus.host, 'opus')).toBe(messages.activatedAfterStart('opus'))
+  expect(await fromBare.launcher.command(fromBare.host, 'same')).toBe(messages.activatedAfterStart('same'))
+  expect(lostLines[1]).toContain('"gemini"')
+  expect(lostLines.some(line => line.startsWith('O modelo muda'))).toBe(false)
+})
+
+test('/as before the first prompt never warns, whatever the models', async () => {
+  const { host, launcher } = await switchLauncherOf(false)
+
+  expect(await launcher.command(host, 'opus')).toBe(messages.activatedBeforeStart('opus'))
+  expect(await launcher.command(host, 'sonnet')).toBe(messages.activatedBeforeStart('sonnet'))
+  expect(await launcher.command(host, 'off')).toBe(messages.deactivatedBeforeStart('sonnet'))
+})
+
+test('/as off mid-conversation warns when the model goes back to the session one', async () => {
+  const { host, launcher } = await switchLauncherOf(true, 'opus')
+
+  const lines = linesOf(await launcher.command(host, 'off'))
+
+  expect(lines[0]).toContain('Agente opus desativado.')
+  expect(lines[1]).toBe(returnLine(OPUS, SESSION_MODEL))
+  expect(lines).toHaveLength(2)
+})
+
+test('/as off mid-conversation adds no line when the agent had no model or the session one', async () => {
+  const bare = await switchLauncherOf(true, 'bare')
+  const same = await switchLauncherOf(true, 'same')
+  const lost = await switchLauncherOf(true, 'lost')
+
+  expect(await bare.launcher.command(bare.host, 'off')).toBe(messages.deactivatedAfterStart('bare'))
+  expect(await same.launcher.command(same.host, 'off')).toBe(messages.deactivatedAfterStart('same'))
+  expect(await lost.launcher.command(lost.host, 'off')).toBe(messages.deactivatedAfterStart('lost'))
+})
+
+test('/as off with no agent active still answers that none is', async () => {
+  const { host, launcher } = await switchLauncherOf(true)
+
+  expect(await launcher.command(host, 'off')).toBe(messages.alreadyOff)
+})
+
+const modelSwitchesOf = async (launcher: Awaited<ReturnType<typeof switchLauncherOf>>['launcher'], host: Host) =>
+  Object.fromEntries((await launcher.catalogView(host)).agents.map(item => [item.name, item.modelSwitch]))
+
+test('catalogView tells, per agent, the model switch that activating it would cause', async () => {
+  const idle = await switchLauncherOf(true)
+
+  expect(await modelSwitchesOf(idle.launcher, idle.host)).toEqual({
+    opus: { from: SESSION_MODEL, to: OPUS },
+    'opus-twin': { from: SESSION_MODEL, to: OPUS },
+    sonnet: { from: SESSION_MODEL, to: SONNET },
+    same: undefined,
+    bare: undefined,
+    lost: undefined,
+  })
+
+  const onOpus = await switchLauncherOf(true, 'opus')
+
+  expect(await modelSwitchesOf(onOpus.launcher, onOpus.host)).toEqual({
+    opus: undefined,
+    'opus-twin': undefined,
+    sonnet: { from: OPUS, to: SONNET },
+    same: { from: OPUS, to: SESSION_MODEL },
+    bare: { from: OPUS, to: SESSION_MODEL },
+    lost: { from: OPUS, to: SESSION_MODEL },
+  })
+
+  const onBare = await switchLauncherOf(true, 'bare')
+
+  expect((await modelSwitchesOf(onBare.launcher, onBare.host)).opus).toEqual({ from: SESSION_MODEL, to: OPUS })
+  expect((await modelSwitchesOf(onBare.launcher, onBare.host)).bare).toBeUndefined()
+})
+
+test('catalogView tells no model switch before the first prompt', async () => {
+  const idle = await switchLauncherOf(false)
+  const onOpus = await switchLauncherOf(false, 'opus')
+
+  expect(Object.values(await modelSwitchesOf(idle.launcher, idle.host)).every(value => value === undefined)).toBe(true)
+  expect(Object.values(await modelSwitchesOf(onOpus.launcher, onOpus.host)).every(value => value === undefined)).toBe(true)
+})
+
+test('catalogView and /as agree on whether activating an agent warns, and on the models', async () => {
+  const names = SWITCH_AGENTS.map(({ file }) => file.slice(file.lastIndexOf('/') + 1, -3))
+
+  for (const promptFrozen of [true, false]) {
+    for (const before of [[], ['opus'], ['bare'], ['sonnet', 'off']]) {
+      for (const name of names) {
+        const { host, launcher } = await switchLauncherOf(promptFrozen, ...before)
+        const view = (await launcher.catalogView(host)).agents.find(item => item.name === name)
+        const answer = await launcher.command(host, name)
+        const warned = linesOf(answer).filter(line => line.startsWith('O modelo muda'))
+
+        expect(warned).toEqual(view?.modelSwitch === undefined ? [] : [changeLine(view.modelSwitch.from, view.modelSwitch.to)])
+      }
+    }
+  }
 })

@@ -26,12 +26,14 @@ export type LauncherReading = { current: () => AgentReading | null }
 export type Monitor = {
   start: (host: MonitorHost) => Promise<void>
   moved: (facts: SessionFacts) => void
+  titled: (title: string | undefined) => void
   turnStarted: (at: number) => void
   turnCompleted: (facts: CompletionFacts, at: number) => void
   spawned: (spawn: SpawnFacts, outcome: SpawnOutcome, at: number) => void
   toolStarted: (agentId: string, tool: string) => void
   toolFinished: (agentId: string, tool: string) => void
   stepUsed: (agentId: string, usage: ModelUsage | null | undefined) => void
+  sent: (agentId: string, text: string, at: number) => void
   changed: () => void
   ended: () => Promise<void>
   command: (host: MonitorHost, args: string) => Promise<string>
@@ -59,6 +61,7 @@ export const createMonitor = (options: PluginOptions, launcher: LauncherReading)
   let working = false
   let turnStartedAt: number | null = null
   let lastAnswer: string | undefined
+  let title: string | undefined
 
   const snapshot = (): Summary => {
     const agent = launcher.current()
@@ -79,6 +82,7 @@ export const createMonitor = (options: PluginOptions, launcher: LauncherReading)
         endedAt,
       })),
       ...(lastAnswer === undefined ? {} : { lastAnswer }),
+      ...(title === undefined ? {} : { title }),
     }
   }
 
@@ -149,7 +153,16 @@ export const createMonitor = (options: PluginOptions, launcher: LauncherReading)
       working = false
       turnStartedAt = null
       lastAnswer = undefined
+      title = undefined
       registry?.moveTo(next.sessionId)
+    },
+    titled: next => {
+      if (next === undefined || next === '' || next === title) {
+        return
+      }
+
+      title = next
+      changed()
     },
     turnStarted: at => {
       working = true
@@ -183,6 +196,7 @@ export const createMonitor = (options: PluginOptions, launcher: LauncherReading)
       collector.stepUsed(agentId, usage)
       changed()
     },
+    sent: (agentId, text, at) => collector.sent(agentId, text, at),
     changed,
     ended: async () => {
       await registry?.end()

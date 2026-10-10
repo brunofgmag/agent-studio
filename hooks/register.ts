@@ -11,13 +11,38 @@ import {
 } from './messages'
 import { type Monitor, SESSION_CHANGING_SOURCES, createMonitor, type MonitorHost } from './monitor/index'
 import type { ClockPort } from './monitor/registry'
-import { drawBand } from './ui/band'
+import { drawFooterButton, footerSummaryOf } from './ui/footer'
 import { type AgentsPort, PANE_ID, type PaneHost, createPane } from './ui/pane'
 
 const PROMPT_FROZEN = { plugin: 'agent-studio', key: 'promptFrozen' } as const
 const COMPOSE_SEEN = { plugin: 'agent-studio', key: 'composeSeen' } as const
 
-const hostOf = ($: EngineInterface): Host => ({
+const SENT_SUMMARIES = new WeakMap<Monitor, { text: string }>()
+
+const sentSummaryOf = (monitor: Monitor) => {
+  const known = SENT_SUMMARIES.get(monitor)
+
+  if (known !== undefined) {
+    return known
+  }
+
+  const created = { text: '' }
+
+  SENT_SUMMARIES.set(monitor, created)
+
+  return created
+}
+
+const sendSummary = async ($: EngineInterface, monitor: Monitor, summary: string) => {
+  try {
+    await $.ui.status(summary === '' ? undefined : summary)
+    sentSummaryOf(monitor).text = summary
+  } catch {
+    return
+  }
+}
+
+const hostOf = ($: EngineInterface, monitor: Monitor | null): Host => ({
   cwd: () => $.session.cwd(),
   root: async () => (await $.session.repo())?.root ?? (await $.session.root()),
   home: async () => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')),
@@ -51,7 +76,11 @@ const hostOf = ($: EngineInterface): Host => ({
     await $.ui.toast(text)
   },
   status: async text => {
-    await $.ui.status(text)
+    if (monitor === null) {
+      await $.ui.status(text)
+    } else {
+      await sendSummary($, monitor, footerSummaryOf(monitor))
+    }
   },
   submit: async text => {
     $.clock.after(0, () => {
@@ -94,7 +123,7 @@ const monitorHostOf = ($: EngineInterface): MonitorHost => ({
 })
 
 const runAs = async ($: EngineInterface, launcher: Launcher, monitor: Monitor | null, args: string) => {
-  const text = await launcher.command(hostOf($), args)
+  const text = await launcher.command(hostOf($, monitor), args)
 
   await guarded(() => monitor?.changed())
 
@@ -105,7 +134,7 @@ const agentsOf = ($: EngineInterface, launcher: Launcher | null, monitor: Monito
   launcher === null
     ? undefined
     : {
-        view: () => launcher.catalogView(hostOf($)),
+        view: () => launcher.catalogView(hostOf($, monitor)),
         use: name => runAs($, launcher, monitor, name),
       }
 
@@ -115,6 +144,7 @@ const paneHostOf = ($: EngineInterface, launcher: Launcher | null, monitor: Moni
   close: id => $.ui.close({ id }),
   panes: () => $.ui.panes(),
   invalidate: () => $.ui.invalidate('ui.render'),
+  focus: async key => (await $.ui.focus({ requestId: PANE_ID, key })).deny === undefined,
   toast: text => $.ui.toast(text),
   stopTask: async agentId => {
     const result = await $.tool.call({ tool: 'TaskStop', task_id: agentId })
@@ -133,9 +163,9 @@ const paneHostOf = ($: EngineInterface, launcher: Launcher | null, monitor: Moni
   clock: clockOf($),
 })
 
-const NOT_OFFERED: Partial<Record<RenderSurface, readonly string[]>> = { terminal: ['Svg'], mobile: ['Input', 'Select'] }
+const NOT_OFFERED: Partial<Record<RenderSurface, readonly string[]>> = { mobile: ['Input', 'Select'] }
 
-const elementsOf = ($: EngineInterface, e: RenderInput<'Pane' | 'AbovePrompt'>) => {
+const elementsOf = ($: EngineInterface, e: RenderInput<'Pane' | 'SessionMode'>) => {
   const table = $.ui.resolve(e)
   const absent = NOT_OFFERED[e.surface] ?? []
 
@@ -168,7 +198,7 @@ export const register: Register = (on, options) => {
       await $.command
         .register({ name: 'as', description: COMMAND_DESCRIPTION, argumentHint: COMMAND_ARGUMENT_HINT })
         .catch(() => undefined)
-      await launcher.start(hostOf($))
+      await launcher.start(hostOf($, monitor))
     }
 
     if (monitor !== null) {
@@ -182,7 +212,7 @@ export const register: Register = (on, options) => {
   })
 
   on('classic.SessionStart', async ($, e, next) => {
-    await launcher?.classicStart(hostOf($), e)
+    await launcher?.classicStart(hostOf($, monitor), e)
 
     if (monitor !== null) {
       await guarded(async () => {
@@ -190,6 +220,7 @@ export const register: Register = (on, options) => {
           monitor.moved(await monitorHostOf($).session())
         }
 
+        monitor.titled(e.session_title)
         monitor.changed()
       })
     }
@@ -198,14 +229,14 @@ export const register: Register = (on, options) => {
   }).catch((_$, e, next) => next(e))
 
   on('turn.start', async ($, e, next) => {
-    await launcher?.turnStarted(hostOf($))
+    await launcher?.turnStarted(hostOf($, monitor))
     await guarded(async () => monitor?.turnStarted(await instantOf($)))
 
     return next(e)
   })
 
   on('turn.step', async function* ($, e, next) {
-    const result = yield* next(launcher === null ? e : await launcher.step(hostOf($), e))
+    const result = yield* next(launcher === null ? e : await launcher.step(hostOf($, monitor), e))
     const { agentId } = e
 
     if (agentId !== undefined) {
@@ -264,7 +295,7 @@ export const register: Register = (on, options) => {
     on('prompt.compose', async ($, e, next) => {
       const composed = await next(e)
 
-      return { sections: await launcher.compose(hostOf($), composed.sections) }
+      return { sections: await launcher.compose(hostOf($, monitor), composed.sections) }
     })
   }
 
@@ -274,6 +305,12 @@ export const register: Register = (on, options) => {
 
       return next(e)
     })
+
+    on('classic.UserPromptSubmit', async (_$, e, next) => {
+      await guarded(() => monitor.titled(e.session_title))
+
+      return next(e)
+    }).catch((_$, e, next) => next(e))
 
     on('session.end', async (_$, e, next) => {
       await guarded(() => monitor.ended())
@@ -286,18 +323,33 @@ export const register: Register = (on, options) => {
     }))
 
     on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) =>
-      pane.render(paneHostOf($, launcher, monitor), elementsOf($, e), e.props.bodyColumns),
+      pane.render(paneHostOf($, launcher, monitor), elementsOf($, e), {
+        columns: e.props.bodyColumns,
+        isFocused: e.props.isFocused,
+      }),
     ).catch((_$, e, next) => next(e))
 
-    on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
       const below = await next(e)
       const host = paneHostOf($, launcher, monitor)
+      const summary = footerSummaryOf(monitor)
 
-      return drawBand(monitor, elementsOf($, e), {
-        below,
-        hasSurvey: e.props.hasSurvey,
-        openPanel: () => pane.open(host),
-      })
+      if (summary !== sentSummaryOf(monitor).text) {
+        await sendSummary($, monitor, summary)
+      }
+
+      return drawFooterButton(elementsOf($, e), below, () => pane.open(host))
+    }).catch((_$, e, next) => next(e))
+
+    on('ui.focus', { requestId: PANE_ID }, async (_$, e, next) => {
+      const press = pane.takeover(e.element, e.origin.kind)
+      const result = await next(e)
+
+      if (result.deny === undefined) {
+        press?.()
+      }
+
+      return result
     }).catch((_$, e, next) => next(e))
 
     on('ui.close', { id: PANE_ID }, async ($, e, next) => {

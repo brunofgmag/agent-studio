@@ -1,6 +1,6 @@
 import type { AgentSpawnInput, PluginOptions, PromptComposeSection, ToolCallInput, TurnStepInput } from 'claude-code'
 
-import type { ActiveAgent, AgentDefinition, CatalogView, ProcessFlags, SavedAgent, SavedSession, SessionState } from '../../types'
+import type { ActiveAgent, AgentDefinition, CatalogView, ModelSwitch, ProcessFlags, SavedAgent, SavedSession, SessionState } from '../../types'
 import * as messages from '../messages'
 import {
   EFFORTS,
@@ -109,6 +109,12 @@ export const createLauncher = (options: PluginOptions): Launcher => {
     )
   }
 
+  const repeatStatus = async (host: Host) => {
+    if (acting() !== null) {
+      await refreshStatus(host)
+    }
+  }
+
   const setFlags = async (host: Host, changed: Partial<ProcessFlags>) => {
     const next = { ...flags, ...changed }
 
@@ -190,21 +196,45 @@ export const createLauncher = (options: PluginOptions): Launcher => {
     return native === null ? list : [messages.nativeSession(native), list].join('\n')
   }
 
+  const modelSwitchBetween = async (
+    host: Host,
+    from: ActiveAgent | null,
+    to: ActiveAgent | null,
+  ): Promise<ModelSwitch | undefined> => {
+    if (!flags.promptFrozen) {
+      return undefined
+    }
+
+    const sessionModel = await host.sessionModel()
+    const before = from?.model ?? sessionModel
+    const after = to?.model ?? sessionModel
+
+    return before === after ? undefined : { from: before, to: after }
+  }
+
+  const modelWarning = (modelSwitch: ModelSwitch | undefined, sentence: (from: string, to: string) => string) =>
+    modelSwitch === undefined ? [] : [sentence(modelSwitch.from, modelSwitch.to)]
+
   const viewCatalog = async (host: Host): Promise<CatalogView> => {
     const { entries, skipped } = await catalogNow(host)
+    const agents = await Promise.all(
+      entries.map(async entry => {
+        const { agent } = activeOf(entry)
 
-    return {
-      agents: entries.map(entry => ({
-        name: entry.agent.name,
-        description: entry.agent.description,
-        source: entry.source,
-        model: activeOf(entry).agent.model,
-        tools: entry.agent.tools,
-        isActive: acting()?.definition.name === entry.agent.name,
-      })),
-      skipped: skipped.length,
-      native,
-    }
+        return {
+          name: entry.agent.name,
+          description: entry.agent.description,
+          source: entry.source,
+          model: agent.model,
+          tools: entry.agent.tools,
+          color: entry.agent.color,
+          isActive: acting()?.definition.name === entry.agent.name,
+          modelSwitch: await modelSwitchBetween(host, active, agent),
+        }
+      }),
+    )
+
+    return { agents, skipped: skipped.length, native }
   }
 
   const describeActive = () => {
@@ -260,18 +290,7 @@ export const createLauncher = (options: PluginOptions): Launcher => {
       : messages.activatedWithoutNotice(agent.name)
   }
 
-  const deactivate = async (host: Host) => {
-    const previous = active?.definition
-
-    if (previous === undefined) {
-      return messages.alreadyOff
-    }
-
-    takeAgent(null, false)
-    optedOut = true
-    await persist(host)
-    await refreshStatus(host)
-
+  const deactivationLine = async (host: Host, previous: AgentDefinition) => {
     if (!flags.promptFrozen) {
       return messages.deactivatedBeforeStart(previous.name)
     }
@@ -279,6 +298,23 @@ export const createLauncher = (options: PluginOptions): Launcher => {
     return (await host.appendHidden(roleEndedNotice(previous)))
       ? messages.deactivatedAfterStart(previous.name)
       : messages.deactivatedWithoutNotice(previous.name)
+  }
+
+  const deactivate = async (host: Host) => {
+    const previous = active
+
+    if (previous === null) {
+      return messages.alreadyOff
+    }
+
+    const modelSwitch = await modelSwitchBetween(host, previous, null)
+
+    takeAgent(null, false)
+    optedOut = true
+    await persist(host)
+    await refreshStatus(host)
+
+    return [await deactivationLine(host, previous.definition), ...modelWarning(modelSwitch, messages.modelReturns)].join('\n')
   }
 
   const effortWarning = (agent: AgentDefinition) =>
@@ -323,6 +359,7 @@ export const createLauncher = (options: PluginOptions): Launcher => {
     }
 
     const { agent, unresolved } = activeOf(entry)
+    const modelSwitch = await modelSwitchBetween(host, active, agent)
 
     takeAgent(agent, false)
     optedOut = false
@@ -335,6 +372,7 @@ export const createLauncher = (options: PluginOptions): Launcher => {
 
     return [
       line,
+      ...modelWarning(modelSwitch, messages.modelChanges),
       ...(unresolved === undefined ? [] : [messages.unresolvedModel(unresolved)]),
       ...effortWarning(entry.agent),
       ...entry.agent.unapplied.map(messages.unappliedField),
@@ -352,6 +390,8 @@ export const createLauncher = (options: PluginOptions): Launcher => {
     }
 
     if (request === '?') {
+      await repeatStatus(host)
+
       return describeActive()
     }
 
@@ -375,9 +415,7 @@ export const createLauncher = (options: PluginOptions): Launcher => {
         await applyDefault(host)
       }
 
-      if (acting() !== null) {
-        await refreshStatus(host)
-      }
+      await repeatStatus(host)
     },
     classicStart: async (host, e) => {
       if (sessionId === '') {
@@ -404,6 +442,7 @@ export const createLauncher = (options: PluginOptions): Launcher => {
       }
 
       await setFlags(host, { promptFrozen: true })
+      await repeatStatus(host)
     },
     command,
     compose: async (host, sections) => {

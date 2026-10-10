@@ -15,6 +15,7 @@ type Stage = {
   store: Map<string, unknown>
   sets: { key: string; value: unknown }[]
   deletes: string[]
+  statuses: (string | undefined)[]
   failSet: boolean
   failList: boolean
   listed: AgentInfo[]
@@ -22,6 +23,7 @@ type Stage = {
   registered: string[]
   spawnIds: string[]
   spawned: string[]
+  prompts: { prompt: string; title: string | undefined }[]
   usage: TurnUsage | null
   denySpawn: boolean
   toolGate: Promise<void> | null
@@ -65,6 +67,7 @@ const stage = (on: On, setup: Setup = {}): Stage => {
     store: new Map(Object.entries(setup.store ?? {})),
     sets: [],
     deletes: [],
+    statuses: [],
     failSet: false,
     failList: false,
     listed: [],
@@ -72,6 +75,7 @@ const stage = (on: On, setup: Setup = {}): Stage => {
     registered: [],
     spawnIds: ['sub-1', 'sub-2', 'sub-3', 'sub-4', 'sub-5'],
     spawned: [],
+    prompts: [],
     usage: null,
     denySpawn: false,
     toolGate: null,
@@ -96,7 +100,11 @@ const stage = (on: On, setup: Setup = {}): Stage => {
   on('session.id', () => ({ value: world.sessionId }))
   on('session.model', () => ({ value: SESSION_MODEL }))
   on('ui.toast', () => ({ value: undefined }))
-  on('ui.status', () => ({ value: undefined }))
+  on('ui.status', (_$, e) => {
+    world.statuses.push(e.text)
+
+    return { value: undefined }
+  })
   on('settings.read', () => ({ value: {} }))
   on('session.surfaces', () => ({ value: [] }))
   on('prompt.submit', (_$, e) => ({ text: e.text }))
@@ -140,6 +148,11 @@ const stage = (on: On, setup: Setup = {}): Stage => {
   })
   on('command.run', () => ({ text: 'bottom answered' }))
   on('classic.SessionStart', () => ({}))
+  on('classic.UserPromptSubmit', (_$, e) => {
+    world.prompts.push({ prompt: e.prompt, title: e.session_title })
+
+    return {}
+  })
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
@@ -725,6 +738,67 @@ test('a /clear marks the old key encerrada and publishes the new key', async ($,
   expect(world.sets.at(-1)?.key).toBe('sess:session-2')
 })
 
+test('the title from SessionStart reaches the published entry', async ($, on) => {
+  const world = stage(on)
+
+  await begin($)
+  await $.classic.SessionStart({ source: 'startup', session_title: 'Fix the login bug' })
+  await world.clock.advance(1000)
+
+  expect(world.store.get(ownKey)).toMatchObject({ title: 'Fix the login bug' })
+})
+
+test('the title from UserPromptSubmit reaches the published entry and the prompt goes down the chain unchanged', async ($, on) => {
+  const world = stage(on)
+
+  await begin($)
+  await world.clock.advance(1000)
+  await $.classic.UserPromptSubmit({ prompt: 'fix the bug', session_title: 'Fix the login bug' })
+  await world.clock.advance(1000)
+
+  expect(world.store.get(ownKey)).toMatchObject({ title: 'Fix the login bug' })
+  expect(world.prompts).toEqual([{ prompt: 'fix the bug', title: 'Fix the login bug' }])
+})
+
+test('a later title replaces the earlier one', async ($, on) => {
+  const world = stage(on)
+
+  await begin($)
+  await $.classic.SessionStart({ source: 'startup', session_title: 'First' })
+  await $.classic.UserPromptSubmit({ prompt: 'go', session_title: 'Second' })
+  await world.clock.advance(1000)
+
+  expect(world.store.get(ownKey)).toMatchObject({ title: 'Second' })
+})
+
+test('a missing or empty title changes nothing and the prompt still passes', async ($, on) => {
+  const world = stage(on)
+
+  await begin($)
+  await $.classic.SessionStart({ source: 'startup', session_title: 'Kept' })
+  await $.classic.UserPromptSubmit({ prompt: 'no title here' })
+  await $.classic.UserPromptSubmit({ prompt: 'empty title', session_title: '' })
+  await world.clock.advance(1000)
+
+  expect(world.store.get(ownKey)).toMatchObject({ title: 'Kept' })
+  expect(world.prompts.map(({ prompt }) => prompt)).toEqual(['no title here', 'empty title'])
+})
+
+test('a clear drops the title of the old conversation', async ($, on) => {
+  const world = stage(on)
+
+  await begin($)
+  await $.classic.SessionStart({ source: 'startup', session_title: 'Old title' })
+  await world.clock.advance(1000)
+  await $.session.end({ reason: 'clear', sessionId: SESSION, resume: { id: SESSION } } as never)
+  world.sessionId = 'session-2'
+  await $.classic.SessionStart({ source: 'clear' })
+  await world.clock.advance(1000)
+
+  expect(world.store.get('sess:session-2')).toBeDefined()
+  expect('title' in (world.store.get('sess:session-2') as object)).toBe(false)
+})
+
 test('a Monitor that cannot read the time breaks no hook', { options: { enableLauncher: false } }, async ($, on) => {
   stage(on, { brokenClock: true })
 
@@ -850,6 +924,12 @@ test('with both options off register adds no hook at all', () => {
   expect(hooksRegisteredWith({ enableLauncher: false, enableMonitor: false })).toEqual([])
 })
 
+test('the UserPromptSubmit hook exists only when the Monitor is on', () => {
+  expect(hooksRegisteredWith({ enableLauncher: false, enableMonitor: true })).toContain('classic.UserPromptSubmit')
+  expect(hooksRegisteredWith({ enableLauncher: true, enableMonitor: true })).toContain('classic.UserPromptSubmit')
+  expect(hooksRegisteredWith({ enableLauncher: true, enableMonitor: false })).not.toContain('classic.UserPromptSubmit')
+})
+
 test('with only the Monitor on there is no prompt hook, and with only the Launcher on there is no turn.complete', () => {
   expect(hooksRegisteredWith({ enableLauncher: false, enableMonitor: true })).not.toContain('prompt.compose')
   expect(hooksRegisteredWith({ enableLauncher: false, enableMonitor: true })).toContain('turn.complete')
@@ -858,16 +938,9 @@ test('with only the Monitor on there is no prompt hook, and with only the Launch
   expect(hooksRegisteredWith({ enableLauncher: true, enableMonitor: false })).not.toContain('session.end')
 })
 
-const BAND_PROPS = {
-  hasSurvey: false,
-  isWorking: false,
-  maxRows: 10,
-  bodyColumns: 80,
-  scroll: { offset: 0, bodyRows: 10 },
-  view: {},
-} as const
+const FOOTER_PROPS = { modes: [] } as const
 
-test('a clear forgets the last reading of the other sessions: the band counts none until the next reading', async ($, on) => {
+test('a clear forgets the last reading of the other sessions: the status line counts none until the next reading', async ($, on) => {
   const world = stage(on, {
     store: {
       'sess:peer-1': entry({ state: 'working', updatedAt: NOW }),
@@ -875,12 +948,12 @@ test('a clear forgets the last reading of the other sessions: the band counts no
     },
   })
 
-  on('ui.render', { component: 'AbovePrompt' }, ($, e) => $.ui.resolve(e).Text({ children: 'below' }))
+  on('ui.render', { component: 'SessionMode' }, ($, e) => $.ui.resolve(e).Text({ children: 'below' }))
   await begin($)
   await world.clock.advance(15_000)
 
-  const ui = await $.ui.mount({ plugin: 'agent-studio', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
-  const texts = async () => (await ui.findAll({ type: 'Text' })).map(text => text.text)
+  const ui = await $.ui.mount({ plugin: 'agent-studio', surface: 'terminal', component: 'SessionMode', props: FOOTER_PROPS })
+  const texts = async () => [(await ui.find({ type: 'Text' }))?.text, world.statuses.at(-1)]
 
   expect(await texts()).toEqual(['below', '2 sessões ativas'])
 
@@ -889,26 +962,27 @@ test('a clear forgets the last reading of the other sessions: the band counts no
   await $.classic.SessionStart({ source: 'clear' })
   await ui.redraw()
 
-  expect(await texts()).toEqual(['below'])
+  expect(await texts()).toEqual(['below', undefined])
 
   await world.clock.advance(15_000)
 
   expect(await texts()).toEqual(['below', '2 sessões ativas'])
+  expect(world.statuses).toEqual(['2 sessões ativas', undefined, '2 sessões ativas'])
   await ui.unmount()
 })
 
 test('a compaction keeps the last reading of the other sessions', async ($, on) => {
   const world = stage(on, { store: { 'sess:peer-1': entry({ state: 'working', updatedAt: NOW }) } })
 
-  on('ui.render', { component: 'AbovePrompt' }, ($, e) => $.ui.resolve(e).Text({ children: 'below' }))
+  on('ui.render', { component: 'SessionMode' }, ($, e) => $.ui.resolve(e).Text({ children: 'below' }))
   await begin($)
   await world.clock.advance(15_000)
 
-  const ui = await $.ui.mount({ plugin: 'agent-studio', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+  const ui = await $.ui.mount({ plugin: 'agent-studio', surface: 'terminal', component: 'SessionMode', props: FOOTER_PROPS })
 
   await $.classic.SessionStart({ source: 'compact' })
   await ui.redraw()
 
-  expect((await ui.findAll({ type: 'Text' })).map(text => text.text)).toEqual(['below', '1 sessão ativa'])
+  expect(world.statuses).toEqual(['1 sessão ativa'])
   await ui.unmount()
 })

@@ -100,10 +100,19 @@ test('a nested map under an unused key is skipped', () => {
 })
 
 test('unknown keys are ignored', () => {
-  const agent = agentOf('---\nname: n\ndescription: d\ncolor: blue\nbackground: true\n---\nb')
+  const agent = agentOf('---\nname: n\ndescription: d\nicon: star\nbackground: true\n---\nb')
 
   expect(agent.unapplied).toEqual([])
   expect(agent.tools).toBeUndefined()
+})
+
+test('color is read as the value of the key, absent when the file has none, and is never reported as unapplied', () => {
+  const painted = agentOf('---\nname: n\ndescription: d\ncolor: "blue"\n---\nb')
+
+  expect(painted.color).toBe('blue')
+  expect(painted.unapplied).toEqual([])
+  expect('color' in agentOf('---\nname: n\ndescription: d\n---\nb')).toBe(false)
+  expect('color' in agentOf('---\nname: n\ndescription: d\ncolor:\n---\nb')).toBe(false)
 })
 
 test('unapplied lists the fields the file declares but the launcher does not apply', () => {

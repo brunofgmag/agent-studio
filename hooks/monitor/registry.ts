@@ -33,6 +33,7 @@ export type Summary = {
   turnStartedAt: number | null
   subagents: readonly BriefSubagent[]
   lastAnswer?: string
+  title?: string
 }
 
 export type RegistryOptions = {
@@ -92,7 +93,7 @@ export const entryOf = (value: unknown): SessionEntry | null => {
     return null
   }
 
-  const { cwd, repo, agent, model, state, turnStartedAt, subagents, lastAnswer, updatedAt } = value
+  const { cwd, repo, agent, model, state, turnStartedAt, subagents, lastAnswer, title, updatedAt } = value
   const briefs = Array.isArray(subagents) ? subagents.map(subagentOf) : null
 
   if (
@@ -119,6 +120,7 @@ export const entryOf = (value: unknown): SessionEntry | null => {
     subagents: briefs as PublishedSubagent[],
     updatedAt,
     ...(typeof lastAnswer === 'string' ? { lastAnswer } : {}),
+    ...(typeof title === 'string' ? { title } : {}),
   }
 }
 

@@ -7,6 +7,7 @@ export type AgentDefinition = {
   tools?: readonly string[]
   disallowedTools?: readonly string[]
   initialPrompt?: string
+  color?: string
   unapplied: readonly string[]
 }
 
@@ -23,13 +24,17 @@ export type ActiveAgent = {
   path: string
 }
 
+export type ModelSwitch = { from: string; to: string }
+
 export type CatalogAgent = {
   name: string
   description: string
   source: AgentSource
   model: string | undefined
   tools: readonly string[] | undefined
+  color: string | undefined
   isActive: boolean
+  modelSwitch: ModelSwitch | undefined
 }
 
 export type CatalogView = {
@@ -62,6 +67,8 @@ export type ProcessFlags = {
 
 export type SubagentStatus = 'running' | 'completed' | 'failed' | 'stopped'
 
+export type Exchange = { kind: 'answer' | 'sent'; text: string; at: number }
+
 export type SubagentRow = {
   id: string
   type: string
@@ -77,6 +84,7 @@ export type SubagentRow = {
   endedAt: number | null
   durationMs: number | null
   answer: string
+  exchanges: readonly Exchange[]
 }
 
 export type SubagentLine = SubagentRow & { depth: number }
@@ -100,6 +108,7 @@ export type SessionEntry = {
   turnStartedAt: number | null
   subagents: readonly PublishedSubagent[]
   lastAnswer?: string
+  title?: string
   updatedAt: number
 }
 

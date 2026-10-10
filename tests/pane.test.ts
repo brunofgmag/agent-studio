@@ -266,6 +266,71 @@ const eachSurface = (name: string, body: (surface: Surface, $: Engine, on: On) =
 
 const ROW_ONE = '✓ concluído  general-purpose  read the logs  —  0:02  2.5k'
 
+const LINE_ONE = '✓ general-purpose concluído · 0:02 · 2.5k'
+
+type Mounted = Awaited<ReturnType<typeof mountPane>>
+
+type RowFacts = {
+  key: string
+  mark: string
+  color: unknown
+  name: string
+  isNameDim: unknown
+  meta: string
+  description: string
+}
+
+const ROW_ELEMENTS = 4
+
+const rowFacts = async (ui: Mounted): Promise<RowFacts[]> => {
+  const elements = (await ui.findAll({})).filter(({ type }) => type === 'Text' || type === 'Button')
+
+  return elements.flatMap((mark, at) => {
+    const [name, meta, description] = elements.slice(at + 1, at + ROW_ELEMENTS)
+
+    return mark.type !== 'Text' ||
+      mark.props.color === undefined ||
+      name?.type !== 'Button' ||
+      meta === undefined ||
+      description === undefined
+      ? []
+      : [
+          {
+            key: String(name.key),
+            mark: mark.text,
+            color: mark.props.color,
+            name: name.text,
+            isNameDim: name.props.dimColor,
+            meta: meta.text,
+            description: description.text,
+          },
+        ]
+  })
+}
+
+const rowLines = async (ui: Mounted): Promise<Record<string, string>> =>
+  Object.fromEntries((await rowFacts(ui)).map(row => [row.key, `${row.mark} ${row.name} ${row.meta}`]))
+
+const GROUP_HEADING = /^(Abertas|Encerradas|Em andamento|Terminados) \(\d+\)$/
+
+const groupMargins = async (ui: Mounted): Promise<unknown[]> =>
+  (await ui.findAll({ type: 'Box' })).flatMap(box => {
+    const first = box.children[0] as { type?: string; children?: unknown[] } | undefined
+
+    return first?.type === 'Text' && GROUP_HEADING.test(String(first.children?.[0])) ? [box.props.marginTop] : []
+  })
+
+const listing = async (ui: Mounted): Promise<string[]> => {
+  const rowKeys = new Set((await rowFacts(ui)).map(row => row.key))
+
+  return (await ui.findAll({})).flatMap(element => {
+    const isHeading = element.type === 'Text' && GROUP_HEADING.test(element.text)
+    const isName = element.type === 'Button' && rowKeys.has(String(element.key))
+
+    return isHeading || isName ? [element.text] : []
+  })
+}
+
 eachSurface('/agentes opens the panel with focus and Esc to close, and answers with one sentence', async (surface, $, on) => {
   const world = stage(on, surface)
   await begin($)
@@ -300,11 +365,50 @@ eachSurface('the three tab buttons carry the digits as hotkeys and switch the ta
   await ui.press({ key: 'tab-3' })
 
   expect((await ui.find({ type: 'Text', text: 'Agentes disponíveis (1)' }))?.type).toBe('Text')
-  expect((await ui.find({ key: 'use-worker' }))?.text).toBe('Usar nesta sessão')
+  expect((await ui.find({ key: 'use-worker' }))?.text).toBe('Usar')
 
   await ui.press({ key: 'tab-1' })
 
   expect((await ui.find({ type: 'Text', text: 'Nenhum subagente nesta sessão.' }))?.type).toBe('Text')
+  await ui.unmount()
+})
+
+eachSurface('the rule under the tabs is cut at the edge of the body and never wraps to a second row', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+  await agentes($)
+
+  const ui = await mountPane($, surface)
+  const rule = await ui.find({ type: 'Text', text: '─'.repeat(PANE_PROPS.bodyColumns) })
+
+  expect(rule?.props.wrap).toBe('truncate')
+  await ui.unmount()
+})
+
+const tabButtons = async (ui: Mounted) => (await ui.findAll({ type: 'Button' })).filter(button => /^tab-\d$/.test(button.key ?? ''))
+
+eachSurface('each tab is a button of the app with no plain and no box around it, the active one bright and the others dim, in a row with a gap of 1', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+  await agentes($)
+
+  const ui = await mountPane($, surface)
+  const buttons = await tabButtons(ui)
+
+  expect(buttons.map(button => button.key)).toEqual(['tab-1', 'tab-2', 'tab-3'])
+  expect(buttons.map(button => button.props.plain)).toEqual([undefined, undefined, undefined])
+  expect(buttons.map(button => button.props.hotkey)).toEqual(['1', '2', '3'])
+  expect(buttons.map(button => button.props.dimColor === true)).toEqual([false, true, true])
+
+  const row = (await ui.findAll({ type: 'Box' })).find(box => box.children.length === 3 && box.children.every(child => (child as { type?: string }).type === 'Button'))
+
+  expect(row?.props.flexDirection).toBe('row')
+  expect(row?.props.gap).toBe(1)
+  expect((await ui.findAll({ type: 'Box' })).filter(box => box.props.borderStyle === 'round')).toEqual([])
+
+  await ui.press({ key: 'tab-3' })
+
+  expect((await tabButtons(ui)).map(button => button.props.dimColor === true)).toEqual([true, true, false])
   await ui.unmount()
 })
 
@@ -319,17 +423,150 @@ eachSurface('the tree draws one button per subagent with the status icon and wor
   await agentes($)
 
   const ui = await mountPane($, surface)
-  const rows = (await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('sub-'))
+  const rows = await rowLines(ui)
 
-  expect(rows.map(row => [row.key, row.text])).toEqual([
-    ['sub-sub-1', '● rodando  Explore  parent  —  0:00  1.5k'],
-    ['sub-sub-2', '● rodando  general-purpose  child  —  0:00  0'],
-    ['sub-sub-3', '✓ concluído  Plan  other root  —  0:02  2.5k'],
+  expect(Object.entries(rows)).toEqual([
+    ['sub-sub-1', '● Explore rodando · 0:00 · 1.5k'],
+    ['sub-sub-2', '● general-purpose rodando · 0:00 · 0'],
+    ['sub-sub-3', '✓ Plan concluído · 0:02 · 2.5k'],
   ])
 
-  const paddings = (await ui.findAll({ type: 'Box' })).map(box => box.props.paddingLeft)
+  const rowBoxes = (await ui.findAll({ type: 'Box' })).filter(box => box.props.marginTop !== undefined && box.props.paddingLeft !== undefined)
 
-  expect(paddings.filter(padding => padding !== undefined)).toEqual([0, 2, 0])
+  expect(rowBoxes.map(box => box.props.paddingLeft)).toEqual([0, 2, 0])
+  expect(rowBoxes.map(box => box.props.marginTop)).toEqual([1, 1, 1])
+  await ui.unmount()
+})
+
+eachSurface('tab 1 groups the trees under Em andamento and Terminados, a tree with any running line staying whole in Em andamento, with the second group one line below the first', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+  await spawn($, { description: 'parent', subagentType: 'Explore' })
+  await spawn($, { description: 'child', parentAgentId: 'sub-1' })
+  await spawn($, { description: 'other root', subagentType: 'Plan' })
+  await complete($, 'sub-1', 'parent done')
+  await complete($, 'sub-3', 'plan ready')
+  await agentes($)
+
+  const ui = await mountPane($, surface)
+
+  expect(await listing(ui)).toEqual(['Em andamento (2)', 'Explore', 'general-purpose', 'Terminados (1)', 'Plan'])
+  expect(await groupMargins(ui)).toEqual([0, 1])
+
+  const headings = (await ui.findAll({ type: 'Text' })).filter(text => GROUP_HEADING.test(text.text))
+
+  expect(headings.map(text => text.props.dimColor)).toEqual([true, true])
+
+  const rowBoxes = (await ui.findAll({ type: 'Box' })).filter(box => box.props.marginTop !== undefined && box.props.paddingLeft !== undefined)
+
+  expect(rowBoxes.map(box => box.props.paddingLeft)).toEqual([0, 2, 0])
+  await ui.unmount()
+})
+
+eachSurface('tab 1 draws only the heading of the group that has rows', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+  await spawn($, { description: 'one', subagentType: 'Explore' })
+  await spawn($, { description: 'two', subagentType: 'Plan' })
+  await agentes($)
+
+  const running = await mountPane($, surface)
+
+  expect(await listing(running)).toEqual(['Em andamento (2)', 'Explore', 'Plan'])
+  expect(await groupMargins(running)).toEqual([0])
+  await running.unmount()
+
+  await complete($, 'sub-1', 'one done')
+  await complete($, 'sub-2', 'two done')
+
+  const finished = await mountPane($, surface)
+
+  expect(await listing(finished)).toEqual(['Terminados (2)', 'Explore', 'Plan'])
+  expect(await groupMargins(finished)).toEqual([0])
+  await finished.unmount()
+})
+
+eachSurface('tab 1 opens the detail of a row under either group', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+  await spawn($, { description: 'live one', subagentType: 'Explore' })
+  await spawn($, { description: 'done one', subagentType: 'Plan' })
+  await complete($, 'sub-2', 'finished')
+  await agentes($)
+
+  const ui = await mountPane($, surface)
+
+  await ui.press({ key: 'sub-sub-2' })
+
+  expect((await ui.find({ key: 'back' }))?.type).toBe('Button')
+  expect(await ui.find({ key: 'stop' })).toBeUndefined()
+  await ui.press({ key: 'back' })
+  await ui.press({ key: 'sub-sub-1' })
+
+  expect((await ui.find({ key: 'stop' }))?.type).toBe('Button')
+  await ui.unmount()
+})
+
+eachSurface('tab 1 shows a dim summary under the header that truncates, with the counts by status and the token total, and none when there is no subagent', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+  await agentes($)
+
+  const empty = await mountPane($, surface)
+
+  expect(await empty.find({ type: 'Text', text: 'Nenhum subagente nesta sessão.' })).toBeDefined()
+  expect((await empty.findAll({ type: 'Text' })).filter(text => text.text.includes('tokens') || text.text === '')).toEqual([])
+  await empty.unmount()
+
+  await spawn($, { description: 'parent', subagentType: 'Explore' })
+  await spawn($, { description: 'child', parentAgentId: 'sub-1' })
+  await spawn($, { description: 'other root', subagentType: 'Plan' })
+  await step($, 'sub-1')
+  await complete($, 'sub-3', 'plan ready')
+
+  const ui = await mountPane($, surface)
+  const summary = await ui.find({ type: 'Text', text: '2 rodando · 1 concluído · 4.0k tokens' })
+
+  expect(summary?.props.dimColor).toBe(true)
+  expect(summary?.props.wrap).toBe('truncate')
+  expect(await ui.find({ type: 'Text', text: 'Nenhum subagente nesta sessão.' })).toBeUndefined()
+
+  const texts = (await ui.findAll({ type: 'Text' })).map(text => text.text)
+
+  expect(texts.indexOf('Sessão sem agente')).toBeLessThan(texts.indexOf('2 rodando · 1 concluído · 4.0k tokens'))
+  expect(texts.indexOf('2 rodando · 1 concluído · 4.0k tokens')).toBeLessThan(texts.indexOf('Em andamento (2)'))
+  await ui.unmount()
+})
+
+eachSurface('tab 1 rows carry the status glyph in its colour, the type as the name of a plain button outside of which the marks live, the status word and the clock in the meta, and the task as the description', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+  await spawn($, { description: 'running one', subagentType: 'Explore' })
+  await spawn($, { description: 'done one', subagentType: 'Plan' })
+  await complete($, 'sub-2', 'finished')
+  await agentes($)
+
+  const ui = await mountPane($, surface)
+
+  expect(await rowFacts(ui)).toEqual([
+    { key: 'sub-sub-1', mark: '●', color: 'suggestion', name: 'Explore', isNameDim: false, meta: 'rodando · 0:00 · 0', description: 'running one' },
+    { key: 'sub-sub-2', mark: '✓', color: 'success', name: 'Plan', isNameDim: false, meta: 'concluído · 0:02 · 2.5k', description: 'done one' },
+  ])
+
+  const shown = (await rowFacts(ui)).flatMap(row => [row.meta, row.description])
+  const texts = (await ui.findAll({ type: 'Text' })).filter(text => shown.includes(text.text))
+  const names = (await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('sub-'))
+
+  expect(texts.map(text => text.text)).toEqual(['rodando · 0:00 · 0', 'running one', 'concluído · 0:02 · 2.5k', 'done one'])
+  expect(texts.map(text => text.props.wrap)).toEqual(Array(4).fill('truncate'))
+  expect(names.map(button => [button.key, button.text, button.props.plain])).toEqual([
+    ['sub-sub-1', 'Explore', true],
+    ['sub-sub-2', 'Plan', true],
+  ])
+
+  const indented = (await ui.findAll({ type: 'Box' })).filter(box => box.props.paddingLeft === 2 && box.props.marginTop === undefined)
+
+  expect(indented.map(box => (box.children[0] as { children: string[] }).children)).toEqual([['running one'], ['done one']])
   await ui.unmount()
 })
 
@@ -371,10 +608,10 @@ eachSurface('pressing a row opens the detail with the prompt and the full answer
   expect((await ui.find({ type: 'Markdown', key: 'answer' }))?.props.text).toBe('Found **3** errors.\n\n- one\n- two')
 
   for (const field of [
-    'Tipo: general-purpose',
-    'Tarefa: read the logs',
-    'Status: ✓ concluído',
-    `Modelo: ${SESSION_MODEL}`,
+    'general-purpose',
+    'concluído · 0:02 · 2.5k',
+    'read the logs',
+    SESSION_MODEL,
     'Read every log and report.',
   ]) {
     expect((await ui.find({ type: 'Text', text: field }))?.type).toBe('Text')
@@ -384,8 +621,243 @@ eachSurface('pressing a row opens the detail with the prompt and the full answer
 
   await ui.press({ key: 'back' })
 
-  expect((await ui.find({ key: 'sub-sub-1' }))?.text).toBe(ROW_ONE)
+  expect((await rowLines(ui))['sub-sub-1']).toBe(LINE_ONE)
   expect(await ui.find({ key: 'back' })).toBeUndefined()
+  await ui.unmount()
+})
+
+const SHOWN_TYPES = ['Text', 'Button', 'Markdown', 'Input']
+
+const detailSequence = async (ui: Mounted): Promise<string[]> => {
+  const shown = (await ui.findAll({})).filter(element => SHOWN_TYPES.includes(element.type))
+  const rule = shown.findIndex(element => element.type === 'Text' && element.text.startsWith('─'))
+
+  return shown.slice(rule + 1).map(element => element.key ?? element.text)
+}
+
+const panelsOf = async (ui: Mounted) =>
+  (await ui.findAll({ type: 'Box' })).filter(
+    box =>
+      box.props.borderStyle === 'round' &&
+      box.props.borderDimColor === true &&
+      box.props.paddingX === 1 &&
+      !JSON.stringify(box.children).includes('"Button"'),
+  )
+
+const LOGS_PROMPT = 'line one\nline two\nline three'
+
+eachSurface('the subagent detail is the actions, the header, the model, the prompt, the answer and the message field, top to bottom', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+  await spawn($, { prompt: LOGS_PROMPT })
+  await complete($, 'sub-1', 'Found it.')
+  await agentes($)
+
+  const ui = await mountPane($, surface)
+
+  await ui.press({ key: 'sub-sub-1' })
+
+  expect(await detailSequence(ui)).toEqual([
+    'back',
+    '✓',
+    'general-purpose',
+    'concluído · 0:02 · 2.5k',
+    'read the logs',
+    SESSION_MODEL,
+    'Prompt dado',
+    '3 linhas',
+    'toggle-prompt',
+    'line one line two line three',
+    'Resposta',
+    'answer',
+    'message-0',
+  ])
+  await ui.unmount()
+})
+
+eachSurface('the detail header is not pressable: a coloured mark, a bold type, a dim meta and the task, then the model dim and indented by 2', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+  await spawn($, { prompt: LOGS_PROMPT })
+  await complete($, 'sub-1', 'Found it.')
+  await agentes($)
+
+  const ui = await mountPane($, surface)
+
+  await ui.press({ key: 'sub-sub-1' })
+
+  expect((await ui.find({ type: 'Text', text: '✓' }))?.props.color).toBe('success')
+  expect((await ui.find({ type: 'Text', text: 'general-purpose' }))?.props.bold).toBe(true)
+  expect((await ui.find({ type: 'Text', text: 'concluído · 0:02 · 2.5k' }))?.props.dimColor).toBe(true)
+  expect((await ui.find({ type: 'Text', text: 'read the logs' }))?.props.dimColor).toBe(true)
+  expect(await ui.find({ key: 'sub-sub-1' })).toBeUndefined()
+
+  const model = (await ui.findAll({ type: 'Box' })).find(
+    box => box.props.paddingLeft === 2 && JSON.stringify(box.children).includes(SESSION_MODEL),
+  )
+
+  expect(model).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: SESSION_MODEL }))?.props.dimColor).toBe(true)
+  await ui.unmount()
+})
+
+eachSurface('a running subagent shows Voltar and Parar first, and no answer yet is a dim sentence in the panel with no earlier toggle', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+  await spawn($, { prompt: LOGS_PROMPT })
+  await agentes($)
+
+  const ui = await mountPane($, surface)
+
+  await ui.press({ key: 'sub-sub-1' })
+
+  const sequence = await detailSequence(ui)
+
+  expect(sequence.slice(0, 2)).toEqual(['back', 'stop'])
+  expect(sequence.slice(-3)).toEqual(['Resposta', 'Sem resposta ainda.', 'message-0'])
+  expect(await ui.find({ type: 'Markdown', key: 'answer' })).toBeUndefined()
+  expect(await ui.find({ key: 'toggle-earlier' })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: 'Sem resposta ainda.' }))?.props.dimColor).toBe(true)
+  expect(await panelsOf(ui)).toHaveLength(2)
+  await ui.unmount()
+})
+
+eachSurface('the prompt is flattened and cut at 300 until mostrar tudo is pressed, then the whole prompt is a Markdown until recolher', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+
+  const long = `${'word '.repeat(80)}\n\nsecond paragraph`
+
+  await spawn($, { prompt: long })
+  await agentes($)
+
+  const ui = await mountPane($, surface)
+
+  await ui.press({ key: 'sub-sub-1' })
+
+  const preview = await ui.find({ type: 'Text', text: 'word word' })
+
+  expect(preview?.text).toHaveLength(300)
+  expect(preview?.text.endsWith('…')).toBe(true)
+  expect(preview?.props.dimColor).toBe(true)
+  expect((await ui.find({ key: 'toggle-prompt' }))?.text).toBe('mostrar tudo')
+  expect((await ui.find({ key: 'toggle-prompt' }))?.props.plain).toBe(true)
+  expect(await ui.find({ type: 'Markdown', key: 'prompt' })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: '3 linhas' }))?.props.dimColor).toBe(true)
+
+  await ui.press({ key: 'toggle-prompt' })
+
+  expect((await ui.find({ type: 'Markdown', key: 'prompt' }))?.props.text).toBe(long)
+  expect(await ui.find({ type: 'Text', text: 'word word' })).toBeUndefined()
+  expect((await ui.find({ key: 'toggle-prompt' }))?.text).toBe('recolher')
+  expect(await panelsOf(ui)).toHaveLength(2)
+
+  await ui.press({ key: 'toggle-prompt' })
+
+  expect(await ui.find({ type: 'Markdown', key: 'prompt' })).toBeUndefined()
+  expect((await ui.find({ key: 'toggle-prompt' }))?.text).toBe('mostrar tudo')
+  await ui.unmount()
+})
+
+eachSurface('a one line prompt says 1 linha, and an empty prompt says it was not recorded in the panel with no toggle', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+  await spawn($, { prompt: 'just one line' })
+  await spawn($, { prompt: '' })
+  await agentes($)
+
+  const ui = await mountPane($, surface)
+
+  await ui.press({ key: 'sub-sub-1' })
+
+  expect((await ui.find({ type: 'Text', text: '1 linha' }))?.type).toBe('Text')
+  expect(await ui.find({ type: 'Text', text: '1 linhas' })).toBeUndefined()
+
+  await ui.press({ key: 'back' })
+  await ui.press({ key: 'sub-sub-2' })
+
+  expect(await ui.find({ key: 'toggle-prompt' })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: 'Prompt não registrado.' }))?.props.dimColor).toBe(true)
+  expect(await ui.find({ type: 'Text', text: /linha/ })).toBeUndefined()
+  expect(await panelsOf(ui)).toHaveLength(2)
+  await ui.unmount()
+})
+
+eachSurface('the last answer is a panel with the Markdown, and the earlier ones sit behind Respostas anteriores until it is pressed', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+  await spawn($)
+  await complete($, 'sub-1', 'first answer')
+  await complete($, 'sub-1', 'second answer')
+  await complete($, 'sub-1', 'third answer')
+  await agentes($)
+
+  const ui = await mountPane($, surface)
+
+  await ui.press({ key: 'sub-sub-1' })
+
+  const toggle = await ui.find({ key: 'toggle-earlier' })
+
+  expect(toggle?.text).toBe('Respostas anteriores (2)')
+  expect(toggle?.props.plain).toBe(true)
+  expect((await ui.find({ type: 'Markdown', key: 'answer' }))?.props.text).toBe('third answer')
+  expect(await ui.findAll({ type: 'Markdown' })).toHaveLength(1)
+
+  await ui.press({ key: 'toggle-earlier' })
+
+  expect((await ui.findAll({ type: 'Markdown' })).map(markdown => markdown.props.text)).toEqual([
+    'first answer',
+    'second answer',
+    'third answer',
+  ])
+  expect(await panelsOf(ui)).toHaveLength(4)
+
+  await ui.press({ key: 'toggle-earlier' })
+
+  expect(await ui.findAll({ type: 'Markdown' })).toHaveLength(1)
+  await ui.unmount()
+})
+
+eachSurface('the prompt and earlier toggles close when the detail is left for the list or for another row, and when the tab changes', async (surface, $, on) => {
+  stage(on, surface)
+  await begin($)
+  await spawn($, { prompt: LOGS_PROMPT })
+  await spawn($, { prompt: LOGS_PROMPT })
+  await complete($, 'sub-1', 'first')
+  await complete($, 'sub-1', 'second')
+  await complete($, 'sub-2', 'first')
+  await complete($, 'sub-2', 'second')
+  await agentes($)
+
+  const ui = await mountPane($, surface)
+  const expand = async () => {
+    await ui.press({ key: 'toggle-prompt' })
+    await ui.press({ key: 'toggle-earlier' })
+  }
+  const state = async () => [(await ui.find({ key: 'toggle-prompt' }))?.text, (await ui.findAll({ type: 'Markdown' })).length]
+
+  await ui.press({ key: 'sub-sub-1' })
+  await expand()
+
+  expect(await state()).toEqual(['recolher', 3])
+
+  await ui.press({ key: 'back' })
+  await ui.press({ key: 'sub-sub-1' })
+
+  expect(await state()).toEqual(['mostrar tudo', 1])
+
+  await expand()
+  await ui.press({ key: 'back' })
+  await ui.press({ key: 'sub-sub-2' })
+
+  expect(await state()).toEqual(['mostrar tudo', 1])
+
+  await expand()
+  await ui.press({ key: 'tab-3' })
+  await ui.press({ key: 'tab-1' })
+  await ui.press({ key: 'sub-sub-2' })
+
+  expect(await state()).toEqual(['mostrar tudo', 1])
   await ui.unmount()
 })
 
@@ -502,12 +974,45 @@ eachSurface('while open the list is checked against the engine every 2 s, and th
   await world.clock.advance(1)
 
   expect(world.listCalls).toBe(before + 1)
-  expect((await ui.find({ key: 'sub-early-1' }))?.text).toBe('● rodando  Explore  born before  —  0:00  0')
+  expect((await rowLines(ui))['sub-early-1']).toBe('● Explore rodando · 0:00 · 0')
 
   await world.clock.advance(4000)
 
   expect(world.listCalls).toBe(before + 3)
   await ui.unmount()
+})
+
+const BEAT_MS = 2000
+
+eachSurface('a beat that finds nothing new to draw asks for no redraw, and one that finds a running clock does', async (surface, $, on) => {
+  let redraws = 0
+
+  on('ui.invalidate', (_$, e, next) => {
+    redraws += 1
+
+    return next(e)
+  })
+
+  const world = stage(on, surface)
+  await begin($)
+  await agentes($)
+  await world.clock.advance(2000)
+
+  const idle = redraws
+
+  await world.clock.advance(2000)
+  await world.clock.advance(2000)
+
+  expect(redraws).toBe(idle)
+
+  await spawn($)
+  await world.clock.advance(2000)
+
+  const running = redraws
+
+  await world.clock.advance(2000)
+
+  expect(redraws).toBeGreaterThan(running)
 })
 
 eachSurface('opening the panel twice does not start a second timer', async (surface, $, on) => {
@@ -517,6 +1022,66 @@ eachSurface('opening the panel twice does not start a second timer', async (surf
   await agentes($)
   await agentes($, 'sessoes')
   await agentes($)
+
+  const before = world.listCalls
+
+  await world.clock.advance(2000)
+
+  expect(world.listCalls).toBe(before + 1)
+  expect(world.opens).toHaveLength(1)
+})
+
+eachSurface('/agentes on a pane that is already open switches the tab and answers the usual sentence, with no second open, no close and one timer', async (surface, $, on) => {
+  const world = stage(on, surface, peerStore())
+  await begin($)
+
+  expect(await agentes($)).toBe('Painel de agentes aberto.')
+
+  const ui = await mountPane($, surface)
+
+  world.openResult = { isPlaced: false, reason: 'already open' }
+
+  expect(await agentes($, 'sessoes')).toBe('Painel de agentes aberto na aba Outras sessões.')
+  await ui.redraw()
+
+  expect(world.opens).toHaveLength(1)
+  expect(world.panes).toEqual([{ id: 'agent-studio', title: 'Agentes' }])
+  expect((await sessionRows(ui)).length).toBe(3)
+
+  expect(await agentes($)).toBe('Painel de agentes aberto.')
+  await ui.redraw()
+
+  expect(world.opens).toHaveLength(1)
+  expect(world.panes).toHaveLength(1)
+  expect((await sessionRows(ui)).length).toBe(0)
+  expect((await ui.find({ type: 'Text', text: 'Nenhum subagente nesta sessão.' }))?.type).toBe('Text')
+
+  const lists = world.listCalls
+
+  await world.clock.advance(2000)
+
+  expect(world.listCalls).toBe(lists + 1)
+  await ui.unmount()
+})
+
+eachSurface('/agentes on a listed pane whose timer had stopped starts one timer again', async (surface, $, on) => {
+  const world = stage(on, surface)
+  await begin($)
+  await agentes($)
+
+  world.panes = []
+  await world.clock.advance(2000)
+
+  const lists = world.listCalls
+
+  await world.clock.advance(2000)
+
+  expect(world.listCalls).toBe(lists)
+
+  world.panes = [{ id: 'agent-studio', title: 'Agentes' }]
+
+  expect(await agentes($)).toBe('Painel de agentes aberto.')
+  expect(world.opens).toHaveLength(1)
 
   const before = world.listCalls
 
@@ -669,14 +1234,99 @@ eachSurface('tab 2 lists the other sessions with their four states in words and 
   expect(rows.map(row => row.key).sort()).toEqual(['sess-ended-3', 'sess-idle-4', 'sess-stale-2', 'sess-working-1'])
   expect(await ui.find({ key: `sess-${SESSION}` })).toBeUndefined()
 
-  const text = Object.fromEntries(rows.map(row => [row.key, row.text]))
+  const text = await rowLines(ui)
 
-  expect(text['sess-working-1']).toBe(
-    'C:/work/api  @architect  trabalhando  2 subagentes  há 5 s  Mapped the payment module and found two call sites that ski…',
-  )
-  expect(text['sess-idle-4']).toBe('C:/work/lib  sem agente  ociosa  0 subagentes  há 1 s')
-  expect(text['sess-stale-2']).toBe('C:/work/web  sem agente  inativa  0 subagentes  há 1 min')
-  expect(text['sess-ended-3']).toBe('C:/work/docs  @writer  encerrada  0 subagentes  há 2 min')
+  expect(text['sess-working-1']).toBe('● api @architect · trabalhando · há 5 s')
+  expect(text['sess-idle-4']).toBe('● lib sem agente · ociosa · há 1 s')
+  expect(text['sess-stale-2']).toBe('● web sem agente · inativa · há 1 min')
+  expect(text['sess-ended-3']).toBe('● docs @writer · encerrada · há 2 min')
+  await ui.unmount()
+})
+
+eachSurface('tab 2 rows carry the presence colour, the dim name of an encerrada, and the description with the count and the answer or the folder', async (surface, $, on) => {
+  stage(on, surface, {
+    ...peerStore(),
+    'sess:idle-4': entry({ cwd: 'C:/work/lib', state: 'idle', updatedAt: NOW - 1000 }),
+  })
+  await begin($)
+  await agentes($, 'sessoes')
+
+  const ui = await mountPane($, surface)
+  const rows = Object.fromEntries((await rowFacts(ui)).map(row => [row.name, row]))
+
+  expect(Object.keys(rows)).toEqual(['api', 'lib', 'web', 'docs'])
+  expect(rows.api).toMatchObject({
+    mark: '●',
+    color: 'success',
+    meta: '@architect · trabalhando · há 5 s',
+    description: '2 subagentes · Mapped the payment module and found two call sites that skip validation.',
+  })
+  expect(rows.lib).toMatchObject({ color: 'warning', meta: 'sem agente · ociosa · há 1 s', description: 'C:/work/lib' })
+  expect(rows.web).toMatchObject({ color: 'inactive', meta: 'sem agente · inativa · há 1 min', description: 'C:/work/web' })
+  expect(rows.docs).toMatchObject({ color: 'inactive', meta: '@writer · encerrada · há 2 min', description: 'C:/work/docs' })
+  expect([rows.api, rows.lib, rows.web].map(row => row?.isNameDim)).toEqual([false, false, false])
+  expect(rows.docs?.isNameDim).toBe(true)
+  await ui.unmount()
+})
+
+eachSurface('tab 2 groups the sessions under Abertas and Encerradas, sorted by presence and then newest, and draws no heading for an empty group', async (surface, $, on) => {
+  const world = stage(on, surface, {
+    ...peerStore(),
+    'sess:idle-4': entry({ cwd: 'C:/work/lib', state: 'idle', updatedAt: NOW - 1000 }),
+    'sess:idle-5': entry({ cwd: 'C:/work/newer-idle', state: 'idle', updatedAt: NOW - 500 }),
+    'sess:ended-6': entry({ cwd: 'C:/work/newer-ended', state: 'ended', updatedAt: NOW - 90_000 }),
+  })
+  await begin($)
+  await agentes($, 'sessoes')
+
+  const ui = await mountPane($, surface)
+
+  expect(await listing(ui)).toEqual([
+    'Abertas (4)',
+    'api',
+    'newer-idle',
+    'lib',
+    'web',
+    'Encerradas (2)',
+    'newer-ended',
+    'docs',
+  ])
+
+  expect(await groupMargins(ui)).toEqual([0, 1])
+
+  for (const key of ['sess:ended-3', 'sess:ended-6']) {
+    world.store.delete(key)
+  }
+
+  await world.clock.advance(2000)
+
+  expect(await listing(ui)).toEqual(['Abertas (4)', 'api', 'newer-idle', 'lib', 'web'])
+
+  for (const key of ['sess:working-1', 'sess:stale-2', 'sess:idle-4', 'sess:idle-5']) {
+    world.store.delete(key)
+  }
+
+  world.store.set('sess:ended-7', entry({ cwd: 'C:/work/gone', state: 'ended' }))
+  await world.clock.advance(2000)
+
+  expect(await listing(ui)).toEqual(['Encerradas (1)', 'gone'])
+  await ui.unmount()
+})
+
+eachSurface('a session row is named by its title when it has one and by the last folder of its cwd when not, on either separator and with a trailing one', async (surface, $, on) => {
+  stage(on, surface, {
+    'sess:titled': entry({ cwd: 'C:/work/api', title: 'Fix the login bug', updatedAt: NOW - 1000 }),
+    'sess:slash': entry({ cwd: 'C:/work/alpha', updatedAt: NOW - 2000 }),
+    'sess:back': entry({ cwd: 'C:\\Users\\bruno\\Projetos\\agent-studio-spike', updatedAt: NOW - 3000 }),
+    'sess:trailing': entry({ cwd: 'C:\\work\\omega\\', updatedAt: NOW - 4000 }),
+    'sess:empty-title': entry({ cwd: 'C:/work/zeta/', title: '', updatedAt: NOW - 5000 }),
+  })
+  await begin($)
+  await agentes($, 'sessoes')
+
+  const ui = await mountPane($, surface)
+
+  expect(await listing(ui)).toEqual(['Abertas (5)', 'Fix the login bug', 'alpha', 'agent-studio-spike', 'omega', 'zeta'])
   await ui.unmount()
 })
 
@@ -689,7 +1339,7 @@ eachSurface('three other sessions draw three rows with three states, and the fir
   const rows = await sessionRows(ui)
 
   expect(rows.map(row => row.key)).toEqual(['sess-working-1', 'sess-stale-2', 'sess-ended-3'])
-  expect(rows.map(row => /trabalhando|ociosa|inativa|encerrada/.exec(row.text)?.[0])).toEqual([
+  expect(Object.values(await rowLines(ui)).map(line => /trabalhando|ociosa|inativa|encerrada/.exec(line)?.[0])).toEqual([
     'trabalhando',
     'inativa',
     'encerrada',
@@ -697,10 +1347,9 @@ eachSurface('three other sessions draw three rows with three states, and the fir
 
   await ui.press({ key: 'sess-working-1' })
 
-  expect((await ui.find({ type: 'Text', text: 'Pasta: C:/work/api' }))?.type).toBe('Text')
-  expect((await ui.find({ type: 'Text', text: 'Agente: @architect' }))?.type).toBe('Text')
-  expect((await ui.find({ type: 'Text', text: 'Estado: trabalhando' }))?.type).toBe('Text')
-  expect((await ui.find({ type: 'Text', text: /^Subagentes: 2$/ }))?.type).toBe('Text')
+  expect((await ui.find({ type: 'Text', text: 'api' }))?.props.bold).toBe(true)
+  expect((await ui.find({ type: 'Text', text: '@architect · trabalhando · há 5 s' }))?.props.dimColor).toBe(true)
+  expect((await ui.find({ type: 'Text', text: 'C:/work/api' }))?.props.dimColor).toBe(true)
   expect((await ui.find({ type: 'Markdown', key: 'last-answer' }))?.props.text).toBe(
     'Mapped the payment module and found two call sites that skip validation.',
   )
@@ -713,6 +1362,65 @@ eachSurface('three other sessions draw three rows with three states, and the fir
   await ui.press({ key: 'back' })
 
   expect((await sessionRows(ui)).length).toBe(3)
+  await ui.unmount()
+})
+
+eachSurface('the detail of another session is the actions, the header, the cwd, the last answer in a panel, the subagents and the message field', async (surface, $, on) => {
+  stage(on, surface, peerStore())
+  await begin($)
+  await agentes($, 'sessoes')
+
+  const ui = await mountPane($, surface)
+
+  await ui.press({ key: 'sess-working-1' })
+
+  expect(await detailSequence(ui)).toEqual([
+    'back',
+    'status',
+    '●',
+    'api',
+    '@architect · trabalhando · há 5 s',
+    '2 subagentes · Mapped the payment module and found two call sites that skip validation.',
+    'C:/work/api',
+    'Última resposta',
+    'last-answer',
+    'Subagentes desta sessão (2)',
+    '● rodando  Explore  map the module  Grep  18k',
+    '✓ concluído  Plan  sketch the migration  —  31k',
+    'message-0',
+  ])
+  expect((await ui.find({ type: 'Text', text: '●' }))?.props.color).toBe('success')
+  expect((await ui.find({ type: 'Text', text: 'api' }))?.props.bold).toBe(true)
+  expect((await ui.find({ type: 'Text', text: 'C:/work/api' }))?.props.dimColor).toBe(true)
+  expect(await ui.find({ key: 'sess-working-1' })).toBeUndefined()
+  expect(await panelsOf(ui)).toHaveLength(1)
+  await ui.unmount()
+})
+
+eachSurface('the cwd line is left out when the header already shows it, and no answer is a dim sentence in the panel', async (surface, $, on) => {
+  stage(on, surface, { 'sess:quiet-1': entry({ cwd: 'C:/work/quiet', updatedAt: NOW }) })
+  await begin($)
+  await agentes($, 'sessoes')
+
+  const ui = await mountPane($, surface)
+
+  await ui.press({ key: 'sess-quiet-1' })
+
+  expect(await detailSequence(ui)).toEqual([
+    'back',
+    'status',
+    '●',
+    'quiet',
+    'sem agente · ociosa · há 0 s',
+    'C:/work/quiet',
+    'Última resposta',
+    'Nenhuma resposta publicada.',
+    'Subagentes desta sessão (0)',
+    'Nenhum subagente publicado.',
+    'message-0',
+  ])
+  expect((await ui.find({ type: 'Text', text: 'Nenhuma resposta publicada.' }))?.props.dimColor).toBe(true)
+  expect(await panelsOf(ui)).toHaveLength(1)
   await ui.unmount()
 })
 

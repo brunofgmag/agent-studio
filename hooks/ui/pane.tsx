@@ -9,14 +9,13 @@ import { drawPeers } from './tab-peers'
 import { drawSession } from './tab-session'
 
 export type PaneElements = Pick<Elements['mobile'], 'Box' | 'Text' | 'Button' | 'Markdown'> &
-  Partial<Pick<Elements['terminal'], 'Input' | 'Select'>> &
-  Partial<Pick<Elements['desktop'], 'Svg'>>
+  Partial<Pick<Elements['terminal'], 'Input' | 'Select'>>
 
 export type StopOutcome = { isStopped: boolean; text: string }
 
 export type Destination = { agentId: string } | { sessionId: string }
 
-type Recipient = { to: Destination; label: string }
+type Recipient = { to: Destination; label: string; record?: (text: string, at: number) => void }
 
 export type AgentsPort = {
   view: () => Promise<CatalogView>
@@ -29,6 +28,7 @@ export type PaneHost = {
   close: (id: string) => Promise<void>
   panes: () => Promise<readonly UiPane[]>
   invalidate: () => void
+  focus: (key: string) => Promise<boolean>
   toast: (text: string) => void
   stopTask: (agentId: string) => Promise<StopOutcome>
   send: (to: Destination, text: string) => Promise<SessionSendResult>
@@ -39,19 +39,24 @@ export type PaneHost = {
 
 export type PaneMonitor = Pick<
   Monitor,
-  'lines' | 'agentInForce' | 'checkAgainstEngine' | 'lastOthers' | 'readOthers'
+  'lines' | 'agentInForce' | 'checkAgainstEngine' | 'lastOthers' | 'readOthers' | 'sent'
 >
+
+export type PaneFrame = { columns: number; isFocused: boolean }
 
 export type Pane = {
   open: (host: PaneHost, tab?: PaneTab) => Promise<boolean>
   command: (host: PaneHost, args: string, asText: () => Promise<string>) => Promise<string>
-  render: (host: PaneHost, elements: PaneElements, columns: number) => Promise<RenderElement>
+  render: (host: PaneHost, elements: PaneElements, frame: PaneFrame) => Promise<RenderElement>
+  takeover: (element: string | undefined, by: 'person' | 'plugin') => (() => void) | undefined
   closed: (host: PaneHost) => Promise<void>
 }
 
 export const PANE_ID = 'agent-studio'
 
 export const BEAT_MS = 2000
+
+const BACK_KEY = 'back'
 
 const TABS: readonly PaneTab[] = [1, 2, 3]
 
@@ -102,31 +107,61 @@ const sendOnce = async (host: PaneHost, to: Destination, text: string): Promise<
   }
 }
 
-const deliver = async (host: PaneHost, { to, label }: Recipient, text: string) => {
+const remember = async (host: PaneHost, { record }: Recipient, text: string) => {
+  if (record === undefined) {
+    return
+  }
+
+  record(text, await host.clock.now())
+  host.invalidate()
+}
+
+const deliver = async (host: PaneHost, recipient: Recipient, text: string) => {
   if (text.trim() === '') {
     return
   }
 
+  const { to, label } = recipient
   const delivery = await sendOnce(host, to, text)
 
-  if (delivery.kind === 'delivered') {
-    host.toast(messages.messageSent(label))
-  } else if (delivery.kind === 'auto-mode') {
-    host.submit(relayRequest(to, text))
-    host.toast(messages.messageRelayed(label))
-  } else {
+  if (delivery.kind === 'refused') {
     host.toast(messages.messageFailed(label, delivery.reason))
+
+    return
   }
+
+  const isRelayed = delivery.kind === 'auto-mode'
+
+  if (isRelayed) {
+    host.submit(relayRequest(to, text))
+  }
+
+  host.toast(isRelayed ? messages.messageRelayed(label) : messages.messageSent(label))
+  await remember(host, recipient, text)
 }
 
-const subagentRecipient = (line: SubagentLine): Recipient => ({
+const subagentRecipient = (line: SubagentLine, record: Recipient['record']): Recipient => ({
   to: { agentId: line.id },
   label: messages.subagentTarget(line.type),
+  record,
 })
 
 const sessionRecipient = (session: OtherSession): Recipient => ({
   to: { sessionId: session.sessionId },
   label: messages.sessionTarget(session),
+})
+
+const trackingPresses = (elements: PaneElements, drawn: Map<string, () => void>): PaneElements => ({
+  ...elements,
+  Button: props => {
+    const { key, onPress } = props as { key?: unknown; onPress?: () => void }
+
+    if (typeof key === 'string' && onPress !== undefined) {
+      drawn.set(key, onPress)
+    }
+
+    return elements.Button(props)
+  },
 })
 
 export const createPane = (monitor: PaneMonitor): Pane => {
@@ -137,10 +172,17 @@ export const createPane = (monitor: PaneMonitor): Pane => {
   }
   let tab: PaneTab = 1
   let catalog: CatalogView | null = null
+  let pendingUse: string | null = null
   let openSubagent: string | null = null
   let openSession: string | null = null
+  let isPromptOpen = false
+  let areEarlierOpen = false
+  const sentCounts = new Map<string, number>()
   let beating: PaneHost | null = null
   let timer: TimerPort | null = null
+  let holdsKeyboard = true
+  let drawnFace: string | null = null
+  let presses = new Map<string, () => void>()
 
   const stopTimer = () => {
     timer?.cancel()
@@ -158,11 +200,24 @@ export const createPane = (monitor: PaneMonitor): Pane => {
     return isOpen
   }
 
+  const faceAt = (now: number): string =>
+    tab === 1
+      ? JSON.stringify(monitor.lines().map(line => [line, messages.subagentRow(line, now).meta]))
+      : JSON.stringify(monitor.lastOthers().map(session => [session, messages.sessionRow(session, now).meta]))
+
   const refresh = async (host: PaneHost) => {
     const read = readers[tab]
 
-    if (read !== null) {
-      await read()
+    if (read === null) {
+      return
+    }
+
+    await read()
+
+    const face = faceAt(await host.clock.now())
+
+    if (face !== drawnFace) {
+      drawnFace = face
       host.invalidate()
     }
   }
@@ -183,9 +238,20 @@ export const createPane = (monitor: PaneMonitor): Pane => {
     })
   }
 
+  const setOpenSubagent = (id: string | null) => {
+    if (id !== openSubagent) {
+      isPromptOpen = false
+      areEarlierOpen = false
+    }
+
+    openSubagent = id
+  }
+
   const show = (next: PaneTab) => {
+    drawnFace = null
     tab = next
-    openSubagent = null
+    pendingUse = null
+    setOpenSubagent(null)
     openSession = null
   }
 
@@ -201,6 +267,18 @@ export const createPane = (monitor: PaneMonitor): Pane => {
     await readCatalog(host)
     host.invalidate()
     await attempt(() => refresh(host))
+  }
+
+  const showAndFocus = (host: PaneHost, ...keys: readonly string[]) => {
+    host.invalidate()
+
+    void attempt(async () => {
+      for (const key of keys) {
+        if (await host.focus(key)) {
+          return
+        }
+      }
+    })
   }
 
   const select = async (host: PaneHost, next: PaneTab) => {
@@ -221,6 +299,35 @@ export const createPane = (monitor: PaneMonitor): Pane => {
     host.invalidate()
   }
 
+  const needsConfirmation = (name: string) =>
+    pendingUse !== name && catalog?.agents.find(agent => agent.name === name)?.modelSwitch !== undefined
+
+  const useAgent = async (host: PaneHost, name: string) => {
+    await readCatalog(host)
+
+    if (needsConfirmation(name)) {
+      pendingUse = name
+      host.invalidate()
+
+      return
+    }
+
+    pendingUse = null
+    await choose(host, name)
+  }
+
+  const isListed = (host: PaneHost): Promise<boolean> =>
+    host.panes().then(
+      panes => panes.some(({ id }) => id === PANE_ID),
+      () => false,
+    )
+
+  const switchTo = async (host: PaneHost) => {
+    host.invalidate()
+    startTimer(host)
+    await attempt(() => refresh(host))
+  }
+
   const open = async (host: PaneHost, next: PaneTab): Promise<boolean> => {
     if ((await host.surfaces()).length === 0) {
       return false
@@ -228,6 +335,12 @@ export const createPane = (monitor: PaneMonitor): Pane => {
 
     show(next)
     await readCatalog(host)
+
+    if (await isListed(host)) {
+      await switchTo(host)
+
+      return true
+    }
 
     const result = await host.open({ id: PANE_ID, title: messages.PANE_TITLE, focus: true, closeOnEscape: true })
 
@@ -252,12 +365,11 @@ export const createPane = (monitor: PaneMonitor): Pane => {
   }
 
   const drawTabs = ({ Box, Button }: PaneElements, host: PaneHost) => (
-    <Box flexDirection="row" gap={2}>
+    <Box flexDirection="row" gap={1} marginTop={1}>
       {TABS.map(number => (
         <Button
           key={`tab-${number}`}
           hotkey={String(number)}
-          plain
           dimColor={number !== tab}
           label={messages.TAB_LABELS[number]}
           onPress={() => select(host, number)}
@@ -266,11 +378,16 @@ export const createPane = (monitor: PaneMonitor): Pane => {
     </Box>
   )
 
+  const recorderOf = (id: string) => (text: string, at: number) => {
+    monitor.sent(id, text, at)
+    sentCounts.set(id, (sentCounts.get(id) ?? 0) + 1)
+  }
+
   const drawThisSession = (elements: PaneElements, host: PaneHost, now: number) => {
     const lines = monitor.lines()
     const open = lines.find(({ id }) => id === openSubagent) ?? null
 
-    openSubagent = open?.id ?? null
+    setOpenSubagent(open?.id ?? null)
 
     return drawSession(
       elements,
@@ -280,19 +397,32 @@ export const createPane = (monitor: PaneMonitor): Pane => {
         catalog,
         lines,
         open,
+        isPromptOpen,
+        areEarlierOpen,
+        sentCount: sentCounts.get(open?.id ?? '') ?? 0,
         now,
       },
       {
         open: id => {
-          openSubagent = id
-          host.invalidate()
+          setOpenSubagent(id)
+          showAndFocus(host, BACK_KEY)
         },
         back: () => {
-          openSubagent = null
-          host.invalidate()
+          const left = openSubagent
+
+          setOpenSubagent(null)
+          showAndFocus(host, `sub-${left}`, `tab-${tab}`)
         },
         stop: line => stop(host, line),
-        send: (line, text) => deliver(host, subagentRecipient(line), text),
+        send: (line, text) => deliver(host, subagentRecipient(line, recorderOf(line.id)), text),
+        togglePrompt: () => {
+          isPromptOpen = !isPromptOpen
+          host.invalidate()
+        },
+        toggleEarlier: () => {
+          areEarlierOpen = !areEarlierOpen
+          host.invalidate()
+        },
         use: name => choose(host, name),
       },
     )
@@ -310,11 +440,13 @@ export const createPane = (monitor: PaneMonitor): Pane => {
       {
         open: sessionId => {
           openSession = sessionId
-          host.invalidate()
+          showAndFocus(host, BACK_KEY)
         },
         back: () => {
+          const left = openSession
+
           openSession = null
-          host.invalidate()
+          showAndFocus(host, `sess-${left}`, `tab-${tab}`)
         },
         send: (session, text) => deliver(host, sessionRecipient(session), text),
         status: session => deliver(host, sessionRecipient(session), messages.STATUS_REQUEST),
@@ -323,7 +455,11 @@ export const createPane = (monitor: PaneMonitor): Pane => {
   }
 
   const drawAgents = (elements: PaneElements, host: PaneHost) =>
-    drawCatalogTab(elements, { hasLauncher: host.agents !== undefined, catalog }, { use: name => choose(host, name) })
+    drawCatalogTab(
+      elements,
+      { hasLauncher: host.agents !== undefined, catalog, pendingUse },
+      { use: name => useAgent(host, name) },
+    )
 
   const drawBody = (elements: PaneElements, host: PaneHost, now: number): RenderElement => {
     if (tab === 1) {
@@ -344,22 +480,33 @@ export const createPane = (monitor: PaneMonitor): Pane => {
 
       return next === 1 ? messages.panelOpened : messages.panelOpenedOnSessions
     },
-    render: async (host, elements, columns) => {
-      const { Box, Text } = elements
+    render: async (host, elements, { columns, isFocused }) => {
+      const drawn = new Map<string, () => void>()
+      const tracked = trackingPresses(elements, drawn)
+      const { Box, Text } = tracked
       const now = await host.clock.now()
-
-      return (
+      const tree = (
         <Box flexDirection="column">
-          {drawTabs(elements, host)}
-          <Text dimColor>{'─'.repeat(columns)}</Text>
+          {drawTabs(tracked, host)}
+          <Text dimColor wrap="truncate">
+            {'─'.repeat(columns)}
+          </Text>
           <Box flexDirection="column" marginTop={1}>
-            {drawBody(elements, host, now)}
+            {drawBody(tracked, host, now)}
           </Box>
         </Box>
       )
+
+      holdsKeyboard = isFocused
+      presses = drawn
+
+      return tree
     },
+    takeover: (element, by) =>
+      by === 'person' && element !== undefined && !holdsKeyboard ? presses.get(element) : undefined,
     closed: host =>
       attempt(async () => {
+        pendingUse = null
         await settle(host)
       }),
   }

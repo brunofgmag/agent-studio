@@ -4,6 +4,7 @@ import { expect, test } from 'claude-code/testing'
 import {
   type Collector,
   type CompletionFacts,
+  EXCHANGE_LIMIT,
   LINE_LIMIT,
   type SpawnFacts,
   createCollector,
@@ -266,6 +267,7 @@ test('a subagent only the official list knows appears with what the list gives a
       endedAt: null,
       durationMs: null,
       answer: '',
+      exchanges: [],
       depth: 0,
     },
   ])
@@ -396,4 +398,86 @@ test('clear forgets every line', () => {
 
   expect(collector.lines()).toEqual([])
   expect(collector.runningCount()).toBe(0)
+})
+
+test('each completion with an answer appends an answer exchange with its instant, and answer stays the latest one', () => {
+  const collector = createCollector()
+
+  bear(collector, 'a1', 1000)
+  complete(collector, 'a1', 2000, { answer: 'first answer' })
+  collector.toolStarted('a1', 'Read')
+  complete(collector, 'a1', 3000, { answer: 'second answer' })
+
+  expect(lineOf(collector, 'a1')?.exchanges).toEqual([
+    { kind: 'answer', text: 'first answer', at: 2000 },
+    { kind: 'answer', text: 'second answer', at: 3000 },
+  ])
+  expect(lineOf(collector, 'a1')?.answer).toBe('second answer')
+})
+
+test('a completion with an empty answer appends no exchange', () => {
+  const collector = createCollector()
+
+  bear(collector, 'a1', 1000)
+  complete(collector, 'a1', 2000, { answer: '' })
+
+  expect(lineOf(collector, 'a1')?.exchanges).toEqual([])
+})
+
+test('a sent message is appended in order among the answers, and one for an unknown agent is ignored', () => {
+  const collector = createCollector()
+
+  bear(collector, 'a1', 1000)
+  collector.sent('a1', 'ask more', 1500)
+  complete(collector, 'a1', 2000, { answer: 'an answer' })
+  collector.sent('a1', 'thanks', 2500)
+  collector.sent('ghost', 'anyone there', 2600)
+
+  expect(lineOf(collector, 'a1')?.exchanges).toEqual([
+    { kind: 'sent', text: 'ask more', at: 1500 },
+    { kind: 'answer', text: 'an answer', at: 2000 },
+    { kind: 'sent', text: 'thanks', at: 2500 },
+  ])
+  expect(collector.lines().map(({ id }) => id)).toEqual(['a1'])
+})
+
+test('a row keeps at most the last 20 exchanges, dropping the oldest, answers and sent messages alike', () => {
+  const collector = createCollector()
+
+  bear(collector, 'a1', 1000)
+  bear(collector, 'a2', 1000)
+
+  for (let index = 0; index < EXCHANGE_LIMIT + 5; index += 1) {
+    collector.sent('a1', `message ${index}`, 2000 + index)
+  }
+
+  for (let index = 0; index < EXCHANGE_LIMIT + 5; index += 1) {
+    complete(collector, 'a2', 2000 + index, { answer: `answer ${index}` })
+    collector.sent('a2', `reply ${index}`, 2000 + index)
+  }
+
+  const sent = lineOf(collector, 'a1')?.exchanges ?? []
+  const mixed = lineOf(collector, 'a2')?.exchanges ?? []
+
+  expect(EXCHANGE_LIMIT).toBe(20)
+  expect(sent).toHaveLength(20)
+  expect(sent[0]?.text).toBe('message 5')
+  expect(sent.at(-1)?.text).toBe('message 24')
+  expect(mixed).toHaveLength(20)
+  expect(mixed.at(-1)).toEqual({ kind: 'sent', text: 'reply 24', at: 2024 })
+  expect(mixed.at(-2)).toEqual({ kind: 'answer', text: 'answer 24', at: 2024 })
+  expect(lineOf(collector, 'a2')?.answer).toBe('answer 24')
+})
+
+test('a line handed out keeps its exchanges when the collector records another one', () => {
+  const collector = createCollector()
+
+  bear(collector, 'a1', 1000)
+
+  const before = lineOf(collector, 'a1')
+
+  collector.sent('a1', 'later', 2000)
+
+  expect(before?.exchanges).toEqual([])
+  expect(lineOf(collector, 'a1')?.exchanges).toHaveLength(1)
 })

@@ -1,33 +1,50 @@
 import type { RenderElement } from 'claude-code'
 
-import type { CatalogAgent, CatalogView } from '../../types'
+import type { CatalogAgent, CatalogView, ModelSwitch } from '../../types'
 import * as messages from '../messages'
 import type { PaneElements } from './pane'
+import { drawActionRow } from './row'
 
 export type CatalogTabView = {
   hasLauncher: boolean
   catalog: CatalogView | null
+  pendingUse: string | null
 }
 
 export type CatalogTabActions = {
   use: (name: string) => void
 }
 
+const rowOf = (agent: CatalogAgent, pending: ModelSwitch | undefined) => {
+  const parts = messages.catalogRow(agent)
+
+  return pending === undefined ? parts : { ...parts, description: messages.modelChanges(pending.from, pending.to) }
+}
+
 const drawAgent = (
-  { Box, Text, Button }: PaneElements,
+  elements: PaneElements,
   agent: CatalogAgent,
   canUse: boolean,
+  pendingUse: string | null,
   actions: CatalogTabActions,
-) => (
-  <Box flexDirection="column" marginTop={1}>
-    <Text>{messages.catalogRowText(agent)}</Text>
-    {canUse ? <Button key={`use-${agent.name}`} label={messages.USE_LABEL} onPress={() => actions.use(agent.name)} /> : null}
-  </Box>
-)
+) => {
+  const { Box, Button } = elements
+  const pending = pendingUse === agent.name ? agent.modelSwitch : undefined
+  const use = canUse ? (
+    <Button
+      key={`use-${agent.name}`}
+      label={pending === undefined ? messages.USE_LABEL : messages.CONFIRM_LABEL}
+      onPress={() => actions.use(agent.name)}
+    />
+  ) : undefined
+
+  return <Box marginTop={1}>{drawActionRow(elements, rowOf(agent, pending), use)}</Box>
+}
 
 const drawCatalog = (
   elements: PaneElements,
   { agents, skipped, native }: CatalogView,
+  pendingUse: string | null,
   actions: CatalogTabActions,
 ): RenderElement => {
   const { Box, Text } = elements
@@ -41,7 +58,7 @@ const drawCatalog = (
       ) : (
         <Box flexDirection="column">
           <Text bold>{messages.catalogHeading(agents.length)}</Text>
-          {agents.map(agent => drawAgent(elements, agent, canUse, actions))}
+          {agents.map(agent => drawAgent(elements, agent, canUse, pendingUse, actions))}
         </Box>
       )}
       {skipped === 0 ? null : (
@@ -60,5 +77,5 @@ export const drawCatalogTab = (elements: PaneElements, view: CatalogTabView, act
     return <Text>{messages.launcherOff}</Text>
   }
 
-  return view.catalog === null ? <Text>{messages.catalogUnreadable}</Text> : drawCatalog(elements, view.catalog, actions)
+  return view.catalog === null ? <Text>{messages.catalogUnreadable}</Text> : drawCatalog(elements, view.catalog, view.pendingUse, actions)
 }

@@ -205,6 +205,23 @@ test('the session publishes only its own key, with the summary fields and the ti
   expect(w.deletes).toEqual([])
 })
 
+test('a summary with a title publishes it, and one without writes no title key', async () => {
+  const titled = world()
+
+  titled.summary.title = 'Fix the login bug'
+  startedRegistry(titled)
+  await titled.advance(BATCH_MS)
+
+  expect(titled.sets[0]?.value.title).toBe('Fix the login bug')
+
+  const untitled = world()
+
+  startedRegistry(untitled)
+  await untitled.advance(BATCH_MS)
+
+  expect('title' in (untitled.sets[0]?.value ?? {})).toBe(false)
+})
+
 test('at most 30 subagents are published: the running ones first, then the most recently ended', async () => {
   const w = world()
 
@@ -395,6 +412,20 @@ test('another session reads an ended entry as encerrada even when it is old', as
   const w = world({ 'sess:gone': entry({ state: 'ended', updatedAt: START - 3_600_000 }) })
 
   expect((await startedRegistry(w).others()).map(({ presence }) => presence)).toEqual(['encerrada'])
+})
+
+test('a stored title is carried to the other sessions, and an entry stored without one is still valid', async () => {
+  const w = world({
+    'sess:titled': entry({ title: 'Fix the login bug', updatedAt: START - 1000 }),
+    'sess:old': entry({ updatedAt: START - 2000 }),
+    'sess:odd': { ...entry({ updatedAt: START - 3000 }), title: 42 },
+  })
+  const others = await startedRegistry(w).others()
+
+  expect(others.map(({ sessionId }) => sessionId)).toEqual(['titled', 'old', 'odd'])
+  expect(others[0]?.title).toBe('Fix the login bug')
+  expect('title' in (others[1] ?? {})).toBe(false)
+  expect('title' in (others[2] ?? {})).toBe(false)
 })
 
 test('an entry of another shape is ignored, kept in the store, and does not break the read', async () => {

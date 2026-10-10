@@ -1,4 +1,15 @@
-import type { AgentSource, CatalogAgent, OtherSession, PaneTab, PublishedSubagent, SkippedFile, SubagentLine, SubagentStatus } from '../types'
+import type {
+  AgentSource,
+  CatalogAgent,
+  Exchange,
+  OtherSession,
+  PaneTab,
+  PublishedSubagent,
+  SessionPresence,
+  SkippedFile,
+  SubagentLine,
+  SubagentStatus,
+} from '../types'
 
 export type ListedAgent = {
   name: string
@@ -18,6 +29,10 @@ export type ActiveSummary = {
 }
 
 const DESCRIPTION_LIMIT = 80
+
+const PROMPT_PREVIEW_LIMIT = 300
+
+const NEWLINE = /\r?\n/
 
 const PROMPT_SWAP = 'depois de um /clear ou de uma compactação'
 
@@ -107,7 +122,15 @@ export const deactivatedAfterStart = (name: string): string =>
 export const deactivatedWithoutNotice = (name: string): string =>
   `Agente ${name} desativado. O modelo e as ferramentas já voltaram ao padrão, mas o aviso de que o papel acabou não entrou na conversa, porque a sessão recusou a mensagem. O system prompt só volta ao padrão ${PROMPT_SWAP}.`
 
-export const alreadyOff = 'Nenhum agente está ativo.'
+const UNCACHED_NEXT_TURN = 'O próximo turno relê a conversa inteira sem cache.'
+
+export const modelChanges = (from: string, to: string): string =>
+  `O modelo muda de ${from} para ${to}. ${UNCACHED_NEXT_TURN}`
+
+export const modelReturns = (from: string, to: string): string =>
+  `O modelo volta de ${from} para ${to}. ${UNCACHED_NEXT_TURN}`
+
+export const alreadyOff ='Nenhum agente está ativo.'
 
 export const nativeSession = (agent: string): string =>
   agent === ''
@@ -152,7 +175,9 @@ const NO_TOOL = '—'
 
 const TASK_LIMIT = 60
 
-const ANSWER_ROW_LIMIT = 60
+const ROW_DESCRIPTION_LIMIT = 200
+
+const META_SEPARATOR = ' · '
 
 const TOAST_DETAIL_LIMIT = 120
 
@@ -188,23 +213,99 @@ const since = (ms: number): string => {
 
 const statusLabel = (status: SubagentStatus): string => `${STATUS_ICON[status]} ${STATUS_WORD[status]}`
 
-export const subagentRowText = (line: SubagentLine, now: number): string => {
-  const duration = line.durationMs ?? now - line.startedAt
+const durationOf = (line: SubagentLine, now: number): number => line.durationMs ?? now - line.startedAt
 
-  return [
+export const subagentRowText = (line: SubagentLine, now: number): string =>
+  [
     statusLabel(line.status),
     line.type,
     cut(line.task, TASK_LIMIT),
     line.tool ?? NO_TOOL,
-    clock(duration),
+    clock(durationOf(line, now)),
     abbreviated(line.tokens),
   ].join('  ')
+
+export type RowParts = {
+  mark: string
+  markColor: string
+  name: string
+  meta: string
+  description: string
+  isDim?: boolean
 }
+
+const metaOf = (parts: readonly (string | null)[]): string =>
+  parts.filter(part => part !== null && part !== '').join(META_SEPARATOR)
+
+const SUBAGENT_COLOR: Record<SubagentStatus, string> = {
+  running: 'suggestion',
+  completed: 'success',
+  failed: 'error',
+  stopped: 'inactive',
+}
+
+export const subagentRow = (line: SubagentLine, now: number): RowParts => ({
+  mark: STATUS_ICON[line.status],
+  markColor: SUBAGENT_COLOR[line.status],
+  name: line.type,
+  meta: metaOf([STATUS_WORD[line.status], line.tool, clock(durationOf(line, now)), abbreviated(line.tokens)]),
+  description: cut(line.task, ROW_DESCRIPTION_LIMIT),
+})
 
 const subagentLine = (line: SubagentLine, now: number): string =>
   `${'  '.repeat(line.depth)}${subagentRowText(line, now)}`
 
 export const noSubagents = 'Nenhum subagente nesta sessão.'
+
+const SUMMARY_WORDS: readonly (readonly [SubagentStatus, string, string])[] = [
+  ['running', 'rodando', 'rodando'],
+  ['completed', 'concluído', 'concluídos'],
+  ['failed', 'falhou', 'falharam'],
+  ['stopped', 'parado', 'parados'],
+]
+
+export const subagentSummary = (lines: readonly SubagentLine[]): string => {
+  if (lines.length === 0) {
+    return ''
+  }
+
+  const counts = SUMMARY_WORDS.map(([status, one, many]) => {
+    const count = lines.filter(line => line.status === status).length
+
+    return count === 0 ? null : `${count} ${plural(count, one, many)}`
+  })
+  const tokens = lines.reduce((total, line) => total + line.tokens, 0)
+
+  return metaOf([...counts, `${abbreviated(tokens)} tokens`])
+}
+
+export type SubagentGroup = { heading: string; lines: readonly SubagentLine[] }
+
+const treesOf = (lines: readonly SubagentLine[]): SubagentLine[][] =>
+  lines.reduce<SubagentLine[][]>((trees, line) => {
+    const current = trees.at(-1)
+
+    if (line.depth === 0 || current === undefined) {
+      trees.push([line])
+    } else {
+      current.push(line)
+    }
+
+    return trees
+  }, [])
+
+const isRunning = ({ status }: SubagentLine): boolean => status === 'running'
+
+export const subagentGroups = (lines: readonly SubagentLine[]): SubagentGroup[] => {
+  const trees = treesOf(lines)
+  const active = trees.filter(tree => tree.some(isRunning)).flat()
+  const finished = trees.filter(tree => !tree.some(isRunning)).flat()
+
+  return [
+    { heading: `Em andamento (${active.length})`, lines: active },
+    { heading: `Terminados (${finished.length})`, lines: finished },
+  ].filter(({ lines: group }) => group.length > 0)
+}
 
 export const agentInForce = (statusText: string): string => `Agente em vigor: ${statusText}`
 
@@ -228,8 +329,60 @@ const sessionLine = (session: OtherSession, now: number): string =>
     since(now - session.updatedAt),
   ].join('  ')
 
-export const sessionRowText = (session: OtherSession, now: number): string =>
-  [sessionLine(session, now), cut(session.lastAnswer ?? '', ANSWER_ROW_LIMIT)].filter(part => part !== '').join('  ')
+const PRESENCE_COLOR: Record<SessionPresence, string> = {
+  trabalhando: 'success',
+  ociosa: 'warning',
+  inativa: 'inactive',
+  encerrada: 'inactive',
+}
+
+const PRESENCE_ORDER: readonly SessionPresence[] = ['trabalhando', 'ociosa', 'inativa', 'encerrada']
+
+const PATH_SEPARATOR = /[\\/]/
+
+const isEnded = ({ presence }: OtherSession): boolean => presence === 'encerrada'
+
+const folderName = (cwd: string): string => cwd.split(PATH_SEPARATOR).findLast(part => part !== '') ?? cwd
+
+export const sessionName = (session: OtherSession): string =>
+  session.title === undefined || session.title.trim() === '' ? folderName(session.cwd) : session.title.trim()
+
+const MARKDOWN_MARKS = /[*`]+|^#+\s+/gm
+
+const unmarked = (text: string): string => text.replace(MARKDOWN_MARKS, '')
+
+const sessionSummary = (session: OtherSession): string => {
+  const answer = cut(unmarked(session.lastAnswer ?? ''), ROW_DESCRIPTION_LIMIT)
+
+  return [session.subagents.length === 0 ? null : sessionSubagentCount(session), answer === '' ? session.cwd : answer]
+    .filter(part => part !== null)
+    .join(META_SEPARATOR)
+}
+
+export const sessionRow = (session: OtherSession, now: number): RowParts => ({
+  mark: '●',
+  markColor: PRESENCE_COLOR[session.presence],
+  name: sessionName(session),
+  meta: metaOf([sessionAgent(session), session.presence, since(now - session.updatedAt)]),
+  description: sessionSummary(session),
+  isDim: isEnded(session),
+})
+
+export type SessionGroup = { heading: string; sessions: readonly OtherSession[] }
+
+const byPresenceThenNewest = (a: OtherSession, b: OtherSession): number =>
+  PRESENCE_ORDER.indexOf(a.presence) - PRESENCE_ORDER.indexOf(b.presence) || b.updatedAt - a.updatedAt
+
+export const sessionGroups = (sessions: readonly OtherSession[]): SessionGroup[] => {
+  const sorted = [...sessions].sort(byPresenceThenNewest)
+  const open = sorted.filter(session => !isEnded(session))
+  const ended = sorted.filter(isEnded)
+
+  return [
+    { heading: `Abertas (${open.length})`, sessions: open },
+    { heading: `Encerradas (${ended.length})`, sessions: ended },
+  ].filter(({ sessions: group }) => group.length > 0)
+}
 
 export const otherSessions = (sessions: readonly OtherSession[], now: number): string =>
   [
@@ -259,18 +412,39 @@ export const launcherOff =
 
 export const catalogHeading = (count: number): string => `Agentes disponíveis (${count})`
 
-export const catalogRowText = (agent: CatalogAgent): string =>
-  [
-    `${agent.name} (${SOURCE_LABEL[agent.source]})`,
-    agent.isActive ? 'ativo' : '',
-    cut(agent.description),
-    agent.model === undefined ? 'modelo da sessão' : `modelo: ${agent.model}`,
-    `ferramentas: ${agent.tools === undefined ? 'todas' : agent.tools.join(', ')}`,
-  ]
-    .filter(part => part !== '')
-    .join('  ')
+const AGENT_COLORS = new Map([
+  ['red', '#d1242f'],
+  ['blue', '#3b82f6'],
+  ['green', '#22a06b'],
+  ['yellow', '#d4a72c'],
+  ['purple', '#8250df'],
+  ['orange', '#e16f24'],
+  ['pink', '#db61a2'],
+  ['cyan', '#1b9aaa'],
+])
 
-export const USE_LABEL = 'Usar nesta sessão'
+const NO_AGENT_COLOR = 'subtle'
+
+export const agentColor = (color: string | undefined): string => AGENT_COLORS.get(color ?? '') ?? NO_AGENT_COLOR
+
+const toolCount = (tools: readonly string[]): string => `${tools.length} ${plural(tools.length, 'ferramenta', 'ferramentas')}`
+
+export const catalogRow = (agent: CatalogAgent): RowParts => ({
+  mark: '●',
+  markColor: agentColor(agent.color),
+  name: agent.name,
+  meta: metaOf([
+    SOURCE_LABEL[agent.source],
+    agent.model === undefined ? 'modelo da sessão' : `modelo: ${agent.model}`,
+    agent.tools === undefined ? null : toolCount(agent.tools),
+    agent.isActive ? 'ativo' : null,
+  ]),
+  description: cut(agent.description),
+})
+
+export const USE_LABEL = 'Usar'
+
+export const CONFIRM_LABEL = 'Confirmar'
 
 export const catalogSkipped = (count: number): string =>
   `${count} ${plural(count, 'arquivo ignorado', 'arquivos ignorados')}. Os motivos aparecem em /as --reload.`
@@ -295,12 +469,25 @@ export const noAnswerYet = 'Sem resposta ainda.'
 
 export const noPrompt = 'Prompt não registrado.'
 
-export const subagentDetailFields = (line: SubagentLine): string[] => [
-  `Tipo: ${line.type}`,
-  `Tarefa: ${line.task}`,
-  `Status: ${statusLabel(line.status)}`,
-  `Modelo: ${line.model ?? NO_TOOL}`,
-]
+export const PROMPT_SHOW_LABEL = 'mostrar tudo'
+
+export const PROMPT_HIDE_LABEL = 'recolher'
+
+export const promptLines = (prompt: string): string => {
+  const count = prompt.trimEnd().split(NEWLINE).length
+
+  return `${count} ${plural(count, 'linha', 'linhas')}`
+}
+
+export const promptPreview = (prompt: string): string => cut(prompt, PROMPT_PREVIEW_LIMIT)
+
+export const earlierLabel = (earlier: readonly Exchange[]): string => {
+  const answers = earlier.filter(({ kind }) => kind === 'answer').length
+
+  return answers === 0 ? `Mensagens anteriores (${earlier.length})` : `Respostas anteriores (${answers})`
+}
+
+export const youSaid = (text: string): string => `Você: ${text}`
 
 const toastDetail = (detail: string): string => {
   const flat = cut(detail, TOAST_DETAIL_LIMIT)
@@ -313,14 +500,6 @@ export const stopRequested = (type: string, detail: string): string =>
 
 export const stopFailed = (type: string, reason: string): string =>
   `Não foi possível parar ${type}${toastDetail(reason)}`
-
-export const sessionDetailFields = (session: OtherSession, now: number): string[] => [
-  `Pasta: ${session.cwd}`,
-  `Agente: ${sessionAgent(session)}`,
-  `Estado: ${session.presence}`,
-  `Subagentes: ${session.subagents.length}`,
-  `Última atividade: ${since(now - session.updatedAt)}`,
-]
 
 export const lastAnswerHeading = 'Última resposta'
 
@@ -361,20 +540,24 @@ export const publishedSubagentText = (subagent: PublishedSubagent): string =>
     abbreviated(subagent.tokens),
   ].join('  ')
 
-export const timelineAlt = (bars: readonly { type: string; status: SubagentStatus }[]): string =>
-  `Linha do tempo de ${bars.length} ${plural(bars.length, 'subagente', 'subagentes')}: ${bars.map(({ type, status }) => `${type} ${STATUS_WORD[status]}`).join(', ')}.`
+export const FOOTER_PANEL_LABEL = 'Painel'
 
-export const OPEN_PANEL_LABEL = 'abrir painel'
+const FOOTER_SEPARATOR = ' · '
 
-const BAND_SEPARATOR = ' · '
+export type FooterFacts = {
+  agent: { name: string; model?: string; effort?: string } | null
+  running: number
+  peers: number
+}
 
-export type BandFacts = { agent: string | null; running: number; peers: number }
+export const footerSummary = ({ agent, running, peers }: FooterFacts): string => {
+  const status = agentStatus(agent)
 
-export const bandText = ({ agent, running, peers }: BandFacts): string =>
-  [
-    agent === null ? '' : `@${agent}`,
+  return [
+    status ?? '',
     running === 0 ? '' : `${running} ${plural(running, 'subagente rodando', 'subagentes rodando')}`,
     peers === 0 ? '' : `${peers} ${plural(peers, 'sessão ativa', 'sessões ativas')}`,
   ]
     .filter(part => part !== '')
-    .join(BAND_SEPARATOR)
+    .join(FOOTER_SEPARATOR)
+}

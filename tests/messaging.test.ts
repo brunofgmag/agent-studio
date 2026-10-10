@@ -2,7 +2,7 @@ import type { On, SessionSendResult } from 'claude-code'
 import { type Engine, expect, mock, test } from 'claude-code/testing'
 
 import { type PaneElements, type PaneHost, createPane, isAutoModeRefusal, relayRequest } from '../hooks/ui/pane'
-import type { OtherSession, SessionEntry } from '../types'
+import type { OtherSession, SessionEntry, SubagentLine } from '../types'
 
 type Surface = 'terminal' | 'desktop'
 
@@ -178,7 +178,7 @@ const sessionDetail = async ($: Engine, surface: Surface) => {
   return ui
 }
 
-const typeMessage = (ui: Mounted, text: string) => ui.input({ key: 'message', text })
+const typeMessage = (ui: Mounted, text: string, key = 'message-0') => ui.input({ key, text })
 
 const eachSurface = (name: string, body: (surface: Surface, $: Engine, on: On) => Promise<void>) => {
   for (const surface of SURFACES) {
@@ -210,12 +210,12 @@ eachSurface('a subagent detail has a message field and no Status button, and the
 
   const ui = await mountPane($, surface)
 
-  expect(await ui.find({ key: 'message' })).toBeUndefined()
+  expect(await ui.find({ key: 'message-0' })).toBeUndefined()
   expect(await ui.find({ key: 'status' })).toBeUndefined()
 
   await ui.press({ key: 'sub-agent-Explore' })
 
-  const field = await ui.find({ key: 'message' })
+  const field = await ui.find({ key: 'message-0' })
 
   expect(field?.type).toBe('Input')
   expect(field?.props.placeholder).toBe('Mensagem para este subagente')
@@ -231,12 +231,12 @@ eachSurface('a session detail has a message field and a Status button, and the l
 
   const ui = await mountPane($, surface)
 
-  expect(await ui.find({ key: 'message' })).toBeUndefined()
+  expect(await ui.find({ key: 'message-0' })).toBeUndefined()
   expect(await ui.find({ key: 'status' })).toBeUndefined()
 
   await ui.press({ key: 'sess-peer-1' })
 
-  const field = await ui.find({ key: 'message' })
+  const field = await ui.find({ key: 'message-0' })
 
   expect(field?.type).toBe('Input')
   expect(field?.props.placeholder).toBe('Mensagem para esta sessão')
@@ -412,7 +412,7 @@ eachSurface('one click makes at most one send and one prompt, with no retry and 
 
   await typeMessage(ui, 'first')
   await world.clock.advance(0)
-  await typeMessage(ui, 'second')
+  await typeMessage(ui, 'second', 'message-1')
   await world.clock.advance(0)
   await world.clock.advance(120_000)
 
@@ -452,7 +452,7 @@ test('a surface with no Input draws the session detail with Status and without a
 
   await ui.press({ key: 'sess-peer-1' })
 
-  expect(await ui.find({ key: 'message' })).toBeUndefined()
+  expect(await ui.find({ key: 'message-0' })).toBeUndefined()
 
   await ui.press({ key: 'status' })
 
@@ -521,6 +521,7 @@ test('a send that throws with the auto mode wording in its message is still no r
     close: async () => undefined,
     panes: async () => [{ id: 'agent-studio', title: 'Agentes', isShown: true, isFocused: true, isPlaced: true }],
     invalidate: () => undefined,
+    focus: async () => true,
     toast: text => {
       toasts.push(text)
     },
@@ -539,12 +540,434 @@ test('a send that throws with the auto mode wording in its message is still no r
     checkAgainstEngine: async () => undefined,
     lastOthers: () => [session],
     readOthers: async () => undefined,
+    sent: () => undefined,
   })
 
   await pane.command(host, 'sessoes', async () => '')
-  await nodeKeyed(await pane.render(host, FAKE_ELEMENTS, 80), 'sess-peer-1')?.props?.onPress?.()
-  await nodeKeyed(await pane.render(host, FAKE_ELEMENTS, 80), 'message')?.props?.onSubmit?.('hello')
+  await nodeKeyed(await pane.render(host, FAKE_ELEMENTS, FOCUSED), 'sess-peer-1')?.props?.onPress?.()
+  await nodeKeyed(await pane.render(host, FAKE_ELEMENTS, FOCUSED), 'message-0')?.props?.onSubmit?.('hello')
 
   expect(prompts).toEqual([])
   expect(toasts).toEqual([`Não foi possível enviar a mensagem para a sessão em C:/work/api: ${AUTO_REFUSAL}`])
+})
+
+const FOCUSED = { columns: 80, isFocused: true }
+
+const UNFOCUSED = { columns: 80, isFocused: false }
+
+const focusStage = (denied: readonly string[] = []) => {
+  const focused: string[] = []
+  const session: OtherSession = { ...peer(), sessionId: 'peer-1', presence: 'trabalhando' }
+  const line: SubagentLine = {
+    id: 'sub-1',
+    type: 'Explore',
+    task: 'read the logs',
+    prompt: '',
+    model: null,
+    parentId: null,
+    background: false,
+    status: 'running',
+    tool: null,
+    tokens: 0,
+    startedAt: NOW,
+    endedAt: null,
+    durationMs: null,
+    answer: '',
+    exchanges: [],
+    depth: 0,
+  }
+  const host: PaneHost = {
+    surfaces: async () => ['terminal'],
+    open: async () => ({ isPlaced: true }),
+    close: async () => undefined,
+    panes: async () => [],
+    invalidate: () => undefined,
+    focus: async key => {
+      focused.push(key)
+
+      return !denied.includes(key)
+    },
+    toast: () => undefined,
+    stopTask: async () => ({ isStopped: false, text: '' }),
+    send: async () => ({ isDelivered: true }),
+    submit: () => undefined,
+    clock: { now: async () => NOW, after: () => ({ cancel: () => undefined }), every: () => ({ cancel: () => undefined }) },
+  }
+  const pane = createPane({
+    lines: () => [line],
+    agentInForce: () => null,
+    checkAgainstEngine: async () => undefined,
+    lastOthers: () => [session],
+    readOthers: async () => undefined,
+    sent: () => undefined,
+  })
+  const press = async (key: string) => {
+    await nodeKeyed(await pane.render(host, FAKE_ELEMENTS, FOCUSED), key)?.props?.onPress?.()
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+  }
+
+  return { host, pane, press, focused }
+}
+
+test('a press that changes the view moves the focus ring onto the back button, and back onto the row it left', async () => {
+  const { host, pane, press, focused } = focusStage()
+
+  await pane.command(host, '', async () => '')
+  await press('sub-sub-1')
+  await press('back')
+  await press('tab-2')
+  await press('sess-peer-1')
+  await press('back')
+
+  expect(focused).toEqual(['back', 'sub-sub-1', 'back', 'sess-peer-1'])
+})
+
+test('going back to a list whose row cannot take the focus ring moves it onto the tab', async () => {
+  const { host, pane, press, focused } = focusStage(['sub-sub-1', 'sess-peer-1'])
+
+  await pane.command(host, '', async () => '')
+  await press('sub-sub-1')
+  await press('back')
+  await press('tab-2')
+  await press('sess-peer-1')
+  await press('back')
+
+  expect(focused).toEqual(['back', 'sub-sub-1', 'tab-1', 'back', 'sess-peer-1', 'tab-2'])
+})
+
+test('a click that only hands the keyboard to the pane presses the button it landed on', async () => {
+  const { host, pane } = focusStage()
+
+  await pane.command(host, '', async () => '')
+  await pane.render(host, FAKE_ELEMENTS, UNFOCUSED)
+  pane.takeover('tab-2', 'person')?.()
+  await Promise.resolve()
+
+  expect(nodeKeyed(await pane.render(host, FAKE_ELEMENTS, FOCUSED), 'sess-peer-1')).toBeDefined()
+})
+
+test('a focus move is no press while the pane holds the keyboard, when a plugin moves it, with no element or with an unknown one', async () => {
+  const { host, pane } = focusStage()
+
+  await pane.command(host, '', async () => '')
+  await pane.render(host, FAKE_ELEMENTS, FOCUSED)
+
+  expect(pane.takeover('tab-2', 'person')).toBeUndefined()
+
+  await pane.render(host, FAKE_ELEMENTS, UNFOCUSED)
+
+  expect(pane.takeover('tab-2', 'plugin')).toBeUndefined()
+  expect(pane.takeover(undefined, 'person')).toBeUndefined()
+  expect(pane.takeover('gone', 'person')).toBeUndefined()
+  expect(pane.takeover('tab-2', 'person')).toBeDefined()
+})
+
+const complete = ($: Engine, agentId: string, answer: string) =>
+  $.turn.complete({ turnId: 't1', answer, durationMs: 1, isAborted: false, reason: 'answer', agentId } as never)
+
+const openedSubagent = async ($: Engine, surface: Surface, answers: readonly string[] = []) => {
+  await begin($)
+  await spawn($)
+
+  for (const answer of answers) {
+    await complete($, 'agent-Explore', answer)
+  }
+
+  await agentes($)
+
+  const ui = await mountPane($, surface)
+
+  await ui.press({ key: 'sub-agent-Explore' })
+
+  return ui
+}
+
+const conversationOf = async (ui: Mounted) =>
+  (await ui.findAll({})).flatMap(element => {
+    if (element.type === 'Markdown') {
+      return [`[${element.text}]`]
+    }
+
+    return element.type === 'Text' && element.text.startsWith('Você: ') ? [element.text] : []
+  })
+
+eachSurface('a delivered message shows as Você under the last answer, and the field is drawn again with the next key', async (surface, $, on) => {
+  stage(on)
+
+  const ui = await openedSubagent($, surface, ['first answer'])
+
+  expect(await conversationOf(ui)).toEqual(['[first answer]'])
+  expect((await ui.find({ key: 'message-0' }))?.type).toBe('Input')
+
+  await typeMessage(ui, 'and the tests?')
+
+  expect(await conversationOf(ui)).toEqual(['[first answer]', 'Você: and the tests?'])
+  expect(await ui.find({ key: 'message-0' })).toBeUndefined()
+  expect((await ui.find({ key: 'message-1' }))?.type).toBe('Input')
+  expect((await ui.find({ type: 'Text', text: 'Você: and the tests?' }))?.props.dimColor).toBe(true)
+  await ui.unmount()
+})
+
+eachSurface('the field key keeps counting past the 20 exchanges the monitor keeps', async (surface, $, on) => {
+  stage(on)
+
+  const ui = await openedSubagent($, surface)
+
+  for (let index = 0; index < 22; index += 1) {
+    await typeMessage(ui, `message ${index}`, `message-${index}`)
+  }
+
+  expect((await ui.find({ key: 'message-22' }))?.type).toBe('Input')
+  expect((await conversationOf(ui)).length).toBe(20)
+  await ui.unmount()
+})
+
+eachSurface('a message relayed because of the auto mode is recorded and moves the field key, and a refused one is not', async (surface, $, on) => {
+  const world = stage(on, refused(AUTO_REFUSAL))
+  const ui = await openedSubagent($, surface)
+
+  await typeMessage(ui, 'relayed one')
+  await world.clock.advance(0)
+
+  expect(await conversationOf(ui)).toEqual(['Você: relayed one'])
+  expect((await ui.find({ key: 'message-1' }))?.type).toBe('Input')
+
+  world.answer = refused('The recipient is gone')
+  await typeMessage(ui, 'refused one', 'message-1')
+
+  expect(await conversationOf(ui)).toEqual(['Você: relayed one'])
+  expect(await ui.find({ key: 'message-2' })).toBeUndefined()
+  expect((await ui.find({ key: 'message-1' }))?.type).toBe('Input')
+
+  world.answer = { kind: 'throw', message: 'socket closed' }
+  await typeMessage(ui, 'thrown one', 'message-1')
+
+  expect(await conversationOf(ui)).toEqual(['Você: relayed one'])
+  expect((await ui.find({ key: 'message-1' }))?.type).toBe('Input')
+  await ui.unmount()
+})
+
+eachSurface('messages typed in a session detail are recorded nowhere and its field key stays message-0', async (surface, $, on) => {
+  stage(on)
+  await begin($)
+  await spawn($)
+  await agentes($, 'sessoes')
+
+  const ui = await mountPane($, surface)
+
+  await ui.press({ key: 'sess-peer-1' })
+  await typeMessage(ui, 'to the session')
+  await ui.press({ key: 'status' })
+
+  expect((await ui.find({ key: 'message-0' }))?.type).toBe('Input')
+  expect(await ui.find({ key: 'message-1' })).toBeUndefined()
+
+  await ui.press({ key: 'back' })
+  await ui.press({ key: 'tab-1' })
+  await ui.press({ key: 'sub-agent-Explore' })
+
+  expect(await conversationOf(ui)).toEqual([])
+  expect((await ui.find({ key: 'message-0' }))?.type).toBe('Input')
+  await ui.unmount()
+})
+
+eachSurface('sent messages after the last answer stay under it, and the earlier ones sit behind the toggle with the answers', async (surface, $, on) => {
+  stage(on)
+
+  const ui = await openedSubagent($, surface, ['answer one'])
+
+  await typeMessage(ui, 'ask two')
+  await complete($, 'agent-Explore', 'answer two')
+  await ui.redraw()
+  await typeMessage(ui, 'ask three', 'message-1')
+
+  expect(await conversationOf(ui)).toEqual(['[answer two]', 'Você: ask three'])
+  expect((await ui.find({ key: 'toggle-earlier' }))?.text).toBe('Respostas anteriores (1)')
+
+  await ui.press({ key: 'toggle-earlier' })
+
+  expect(await conversationOf(ui)).toEqual(['[answer one]', 'Você: ask two', '[answer two]', 'Você: ask three'])
+  await ui.unmount()
+})
+
+eachSurface('with only sent messages before the answer the toggle counts messages', async (surface, $, on) => {
+  stage(on)
+
+  const ui = await openedSubagent($, surface)
+
+  await typeMessage(ui, 'hello there')
+
+  expect(await ui.find({ key: 'toggle-earlier' })).toBeUndefined()
+  expect(await conversationOf(ui)).toEqual(['Você: hello there'])
+  expect((await ui.find({ type: 'Text', text: 'Sem resposta ainda.' }))?.props.dimColor).toBe(true)
+
+  await complete($, 'agent-Explore', 'hi back')
+  await ui.redraw()
+
+  expect((await ui.find({ key: 'toggle-earlier' }))?.text).toBe('Mensagens anteriores (1)')
+  expect(await conversationOf(ui)).toEqual(['[hi back]'])
+
+  await ui.press({ key: 'toggle-earlier' })
+
+  expect(await conversationOf(ui)).toEqual(['Você: hello there', '[hi back]'])
+  await ui.unmount()
+})
+
+const SENT_LINE: SubagentLine = {
+  id: 'sub-1',
+  type: 'Explore',
+  task: 'read the logs',
+  prompt: 'Read every log.',
+  model: null,
+  parentId: null,
+  background: false,
+  status: 'completed',
+  tool: null,
+  tokens: 0,
+  startedAt: NOW,
+  endedAt: NOW,
+  durationMs: 0,
+  answer: '',
+  exchanges: [],
+  depth: 0,
+}
+
+const recordingStage = (send: PaneHost['send'], line: SubagentLine = SENT_LINE) => {
+  const recorded: { agentId: string; text: string; at: number }[] = []
+  const session: OtherSession = { ...peer(), sessionId: 'peer-1', presence: 'trabalhando' }
+  const host: PaneHost = {
+    surfaces: async () => ['terminal'],
+    open: async () => ({ isPlaced: true }),
+    close: async () => undefined,
+    panes: async () => [],
+    invalidate: () => undefined,
+    focus: async () => true,
+    toast: () => undefined,
+    stopTask: async () => ({ isStopped: false, text: '' }),
+    send,
+    submit: () => undefined,
+    clock: { now: async () => NOW + 7, after: () => ({ cancel: () => undefined }), every: () => ({ cancel: () => undefined }) },
+  }
+  const pane = createPane({
+    lines: () => [line],
+    agentInForce: () => null,
+    checkAgainstEngine: async () => undefined,
+    lastOthers: () => [session],
+    readOthers: async () => undefined,
+    sent: (agentId, text, at) => {
+      recorded.push({ agentId, text, at })
+    },
+  })
+  const press = async (key: string) => {
+    await nodeKeyed(await pane.render(host, FAKE_ELEMENTS, FOCUSED), key)?.props?.onPress?.()
+  }
+  const submit = async (key: string, text: string) => {
+    await nodeKeyed(await pane.render(host, FAKE_ELEMENTS, FOCUSED), key)?.props?.onSubmit?.(text)
+  }
+
+  return { pane, host, press, submit, recorded }
+}
+
+test('the pane tells the monitor about a delivered and a relayed message to a subagent, with the instant, and about no refused or thrown one', async () => {
+  let answer: () => Promise<SessionSendResult> = async () => ({ isDelivered: true })
+  const { pane, host, press, submit, recorded } = recordingStage(() => answer())
+
+  await pane.command(host, '', async () => '')
+  await press('sub-sub-1')
+  await submit('message-0', 'delivered one')
+
+  answer = async () => ({ isDelivered: false, reason: AUTO_REFUSAL })
+  await submit('message-1', 'relayed one')
+
+  answer = async () => ({ isDelivered: false, reason: 'The recipient is gone' })
+  await submit('message-2', 'refused one')
+
+  answer = async () => {
+    throw new Error('socket closed')
+  }
+  await submit('message-2', 'thrown one')
+  await submit('message-2', '   ')
+
+  expect(recorded).toEqual([
+    { agentId: 'sub-1', text: 'delivered one', at: NOW + 7 },
+    { agentId: 'sub-1', text: 'relayed one', at: NOW + 7 },
+  ])
+})
+
+test('the pane tells the monitor about nothing that is sent from a session detail, a message or a Status', async () => {
+  const { pane, host, press, submit, recorded } = recordingStage(async () => ({ isDelivered: true }))
+
+  await pane.command(host, 'sessoes', async () => '')
+  await press('sess-peer-1')
+  await submit('message-0', 'to the session')
+  await press('status')
+
+  expect(recorded).toEqual([])
+})
+
+const textsOf = (tree: unknown): string[] => {
+  if (typeof tree === 'string') {
+    return [tree]
+  }
+
+  if (Array.isArray(tree)) {
+    return tree.flatMap(textsOf)
+  }
+
+  return typeof tree === 'object' && tree !== null ? textsOf((tree as Node).children) : []
+}
+
+test('the model line is drawn when the subagent has a model and left out when it has none', async () => {
+  const draw = async (line: SubagentLine) => {
+    const { pane, host, press } = recordingStage(async () => ({ isDelivered: true }), line)
+
+    await pane.command(host, '', async () => '')
+    await press('sub-sub-1')
+
+    return textsOf(await pane.render(host, FAKE_ELEMENTS, FOCUSED))
+  }
+
+  expect(await draw({ ...SENT_LINE, model: 'claude-haiku-5-5' })).toContain('claude-haiku-5-5')
+  expect(await draw(SENT_LINE)).not.toContain('claude-haiku-5-5')
+  expect(await draw(SENT_LINE)).not.toContain('')
+})
+
+const parentOf = (tree: unknown, key: string): Node | undefined => {
+  if (Array.isArray(tree)) {
+    return tree.map(child => parentOf(child, key)).find(found => found !== undefined)
+  }
+
+  if (typeof tree !== 'object' || tree === null) {
+    return undefined
+  }
+
+  const node = tree as Node
+  const children = Array.isArray(node.children) ? node.children : [node.children]
+
+  return children.some(child => (child as Node | null)?.props?.key === key) ? node : parentOf(node.children, key)
+}
+
+test('the action buttons of a detail sit one cell apart, in a subagent and in another session', async () => {
+  const { host, pane, press } = focusStage()
+
+  await pane.command(host, '', async () => '')
+  await press('sub-sub-1')
+
+  expect((parentOf(await pane.render(host, FAKE_ELEMENTS, FOCUSED), 'back')?.props as { gap?: number }).gap).toBe(1)
+
+  await press('back')
+  await press('tab-2')
+  await press('sess-peer-1')
+
+  expect((parentOf(await pane.render(host, FAKE_ELEMENTS, FOCUSED), 'back')?.props as { gap?: number }).gap).toBe(1)
+})
+
+test('the tab row leaves one row above it, so the focus ring of a tab is not cut by the top of the pane', async () => {
+  const { host, pane } = focusStage()
+
+  await pane.command(host, '', async () => '')
+
+  expect((parentOf(await pane.render(host, FAKE_ELEMENTS, FOCUSED), 'tab-1')?.props as { marginTop?: number }).marginTop).toBe(1)
 })
