@@ -1,4 +1,4 @@
-import type { On, PromptComposeSection } from 'claude-code'
+import type { On, PromptComposeSection, TurnStepInput } from 'claude-code'
 import { type Engine, type Plugin, expect, mock, test } from 'claude-code/testing'
 
 import {
@@ -7,8 +7,10 @@ import {
   resolveModel,
   roleEndedNotice,
   roleNotice,
+  spawnDenial,
   toolDenial,
 } from '../hooks/launcher/apply'
+import { type Host, createLauncher } from '../hooks/launcher/index'
 import type { AgentDefinition, ProcessFlags, SavedSession } from '../types'
 
 type Agent = { file: string; text: string }
@@ -19,6 +21,8 @@ type Setup = {
   flags?: Partial<ProcessFlags>
   cwd?: string
   repoRoot?: string
+  settings?: Readonly<Record<string, unknown>>
+  submitFail?: true
 }
 
 type Stage = {
@@ -30,9 +34,13 @@ type Stage = {
   lists: string[]
   reads: string[]
   toasts: string[]
-  steps: { model: string; agentId: string | undefined }[]
+  steps: { model: string; effort: TurnStepInput['effort']; agentId: string | undefined }[]
   tools: { tool: string; agentId: string | undefined }[]
+  statuses: (string | undefined)[]
+  spawns: { subagentType: string; parentAgentId: string | undefined }[]
+  submitted: { text: string; origin: unknown }[]
   registered: string[]
+  clock: ReturnType<typeof mock.clock>
   session: ReturnType<typeof mock.session>
 }
 
@@ -97,13 +105,16 @@ const stage = (on: On, setup: Setup = {}): Stage => {
     toasts: [],
     steps: [],
     tools: [],
+    statuses: [],
+    spawns: [],
+    submitted: [],
     registered: [],
+    clock: mock.clock(on, { now: NOW }),
     session: mock.session(on),
   }
   const filesNow = () => new Map(world.files.map(({ file, text }) => [slashed(file), text]))
 
   mock.env(on, HOME)
-  mock.clock(on, { now: NOW })
   on('session.cwd', () => ({ value: cwd }))
   on('session.root', () => ({ value: cwd }))
   on('session.repo', () => ({
@@ -118,6 +129,21 @@ const stage = (on: On, setup: Setup = {}): Stage => {
     world.toasts.push(e.text)
 
     return { value: undefined }
+  })
+  on('ui.status', (_$, e) => {
+    world.statuses.push(e.text)
+
+    return { value: undefined }
+  })
+  on('settings.read', () => ({ value: setup.settings ?? {} }))
+  on('prompt.submit', (_$, e) => {
+    if (setup.submitFail) {
+      throw new Error('busy')
+    }
+
+    world.submitted.push({ text: e.text, origin: e.origin })
+
+    return { text: e.text }
   })
   on('store.get', (_$, e) => ({ value: world.store.get(e.key) }))
   on('store.set', (_$, e) => {
@@ -177,15 +203,20 @@ const stage = (on: On, setup: Setup = {}): Stage => {
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('command.register', (_$, e) => {
-    world.registered.push(e.name)
+    if (e.name !== 'agentes') {
+      world.registered.push(e.name)
+    }
 
     return { value: { command: e.name } }
   })
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+  on('agent.list', () => ({ value: [] }))
   on('classic.SessionStart', () => ({}))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('prompt.compose', () => ({ sections: BASE_SECTIONS }))
   on('turn.step', async function* (_$, e) {
-    world.steps.push({ model: e.model, agentId: e.agentId })
+    world.steps.push({ model: e.model, effort: e.effort, agentId: e.agentId })
 
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
   })
@@ -193,6 +224,11 @@ const stage = (on: On, setup: Setup = {}): Stage => {
     world.tools.push({ tool: String(e.tool), agentId: e.agentId })
 
     return { ref: 1, result: 'done', text: 'done' }
+  })
+  on('agent.spawn', (_$, e) => {
+    world.spawns.push({ subagentType: e.subagentType, parentAgentId: e.parentAgentId })
+
+    return { model: SESSION_MODEL, agentId: 'spawned-1' }
   })
 
   return world
@@ -227,21 +263,42 @@ const sectionsOf = async ($: Engine) =>
 
 const idsOf = async ($: Engine) => (await sectionsOf($)).map(section => section.id)
 
-const stepModelOf = async ($: Engine, world: Stage, agentId?: string, model = SESSION_MODEL) => {
+type StepRequest = { agentId?: string; model?: string; effort?: TurnStepInput['effort'] }
+
+const stepOf = async ($: Engine, world: Stage, request: StepRequest = {}) => {
   const before = world.steps.length
   const stream = $.turn.step({
     turnId: 't1',
     index: 0,
-    model,
+    model: request.model ?? SESSION_MODEL,
     messageCount: 1,
-    ...(agentId === undefined ? {} : { agentId }),
+    ...(request.agentId === undefined ? {} : { agentId: request.agentId }),
+    ...(request.effort === undefined ? {} : { effort: request.effort }),
   })
 
   for await (const _chunk of stream) {
     continue
   }
 
-  return world.steps.slice(before)[0]?.model
+  return world.steps.slice(before)[0]
+}
+
+const stepModelOf = async ($: Engine, world: Stage, agentId?: string, model = SESSION_MODEL) =>
+  (await stepOf($, world, { model, ...(agentId === undefined ? {} : { agentId }) }))?.model
+
+const stepEffortOf = async ($: Engine, world: Stage, request: StepRequest = {}) =>
+  (await stepOf($, world, request))?.effort
+
+const spawnOf = async ($: Engine, world: Stage, subagentType: string, parentAgentId?: string) => {
+  const before = world.spawns.length
+  const result = await $.agent.spawn({
+    prompt: 'go',
+    description: 'go',
+    subagentType,
+    ...(parentAgentId === undefined ? {} : { parentAgentId }),
+  } as never)
+
+  return { reached: world.spawns.length > before, result }
 }
 
 const useTool = async ($: Engine, world: Stage, tool: string, agentId?: string) => {
@@ -549,7 +606,7 @@ test('the agent survives /clear, the entry moves to the new session id and the p
   expect(world.session.appended()).toHaveLength(0)
 })
 
-test('/as x saves a pointer without the body and /as off removes the key', async ($, on) => {
+test('/as x saves a pointer without the body and /as off keeps only the opt-out', async ($, on) => {
   const world = stage(on)
   await begin($)
   await as($, 'worker')
@@ -558,7 +615,7 @@ test('/as x saves a pointer without the body and /as off removes the key', async
 
   await as($, 'off')
 
-  expect(world.store.has(keyOf(SESSION))).toBe(false)
+  expect(world.store.get(keyOf(SESSION))).toEqual({ agent: null, native: null, at: NOW, optedOut: true })
 })
 
 test('a new process restores the agent from the store with one file read and no directory listing', async ($, on) => {
@@ -799,6 +856,15 @@ test('in a session with a native agent /as changes nothing, and the list and /as
   expect(world.store.get(keyOf(SESSION))).toEqual({ agent: null, native: 'architect', at: NOW })
 })
 
+test('a SessionStart for a native agent while the session id answers empty writes no key to the store', async ($, on) => {
+  const world = stage(on)
+  world.sessionId = ''
+  await begin($)
+  await $.classic.SessionStart({ source: 'startup', agent_type: 'architect' })
+
+  expect([...world.store.keys()]).toEqual([])
+})
+
 test('a SessionStart with a null agent_type does not forget the native agent', async ($, on) => {
   stage(on)
   await begin($)
@@ -879,6 +945,706 @@ test('with enableLauncher false the plugin hooks nothing', { options: { enableLa
   expect((await useTool($, world, 'Bash')).reached).toBe(true)
 })
 
+const EXTRA_AGENTS: Agent[] = [
+  { file: pathOf('designer'), text: agent('designer', 'model: claude-opus-5-5[1m]\neffort: xhigh\n') },
+  { file: pathOf('thinker'), text: agent('thinker', 'effort: high\n') },
+  { file: pathOf('loud'), text: agent('loud', 'effort: XHigh\n') },
+  { file: pathOf('muddled'), text: agent('muddled', 'effort: turbo\n') },
+  { file: pathOf('starter'), text: agent('starter', 'initialPrompt: start here\n') },
+  { file: pathOf('blank-start'), text: agent('blank-start', 'initialPrompt: |\n') },
+  { file: pathOf('dispatcher'), text: agent('dispatcher', 'tools: Agent(researcher), Read\n') },
+  { file: pathOf('free-dispatcher'), text: agent('free-dispatcher', 'tools: Agent, Read\n') },
+  { file: pathOf('multi-dispatcher'), text: agent('multi-dispatcher', 'tools: Agent(a), Agent(b, c)\n') },
+  { file: pathOf('reader'), text: agent('reader', 'tools: Read\n') },
+]
+
+const WITH_EXTRAS = [...DEFAULT_AGENTS, ...EXTRA_AGENTS]
+
+const DESIGNER_LINE = '@designer · claude-opus-5-5[1m] · xhigh'
+
+test('turn.step takes the agent effort on the main loop and leaves a subagent step alone', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+
+  expect(await stepEffortOf($, world, { effort: 'low' })).toBe('low')
+
+  await as($, 'designer')
+
+  expect(await stepEffortOf($, world, { effort: 'low' })).toBe('xhigh')
+  expect(await stepEffortOf($, world)).toBe('xhigh')
+  expect(await stepEffortOf($, world, { agentId: 'sub-1', effort: 'low' })).toBe('low')
+  expect(await stepEffortOf($, world, { agentId: 'sub-1' })).toBeUndefined()
+})
+
+test('the effort does not depend on the model comparison, which only guards the model', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'designer')
+
+  const step = await stepOf($, world, { model: 'claude-fallback-1', effort: 'low' })
+
+  expect(step?.model).toBe('claude-fallback-1')
+  expect(step?.effort).toBe('xhigh')
+})
+
+test('an agent with an effort and no model changes the effort only', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'thinker')
+
+  const step = await stepOf($, world)
+
+  expect(step?.model).toBe(SESSION_MODEL)
+  expect(step?.effort).toBe('high')
+})
+
+test('an agent without effort leaves the step effort as it came', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'worker')
+
+  expect(await stepEffortOf($, world, { effort: 'medium' })).toBe('medium')
+  expect(await stepEffortOf($, world)).toBeUndefined()
+})
+
+test('the effort word is matched without regard to case', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'loud')
+
+  expect(await stepEffortOf($, world)).toBe('xhigh')
+})
+
+test('an effort outside the five words is not applied, and /as says so', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+
+  const text = await as($, 'muddled')
+
+  expect(text).toContain('O effort "turbo"')
+  expect(text).toContain('low, medium, high, xhigh, max')
+  expect(await stepEffortOf($, world, { effort: 'low' })).toBe('low')
+  expect(await as($, '?')).toContain('Effort: o da sessão')
+  expect(world.statuses).toEqual(['@muddled'])
+})
+
+test('a valid effort adds no warning to /as', async ($, on) => {
+  stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+
+  expect(await as($, 'designer')).not.toContain('effort')
+})
+
+test('/as ? shows the effort of the agent or says it is the session one', async ($, on) => {
+  stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'designer')
+
+  const designer = (await as($, '?')).split('\n')
+
+  expect(designer.indexOf('Effort: xhigh')).toBe(designer.findIndex(line => line.startsWith('Modelo:')) + 1)
+
+  await as($, 'plain')
+
+  expect(await as($, '?')).toContain('Effort: o da sessão')
+})
+
+test('the status line is written on /as, replaced by the next agent and cleared by /as off', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+
+  expect(world.statuses).toEqual([])
+
+  await as($, 'designer')
+  await as($, 'plain')
+  await as($, 'thinker')
+  await as($, 'worker')
+  await as($, 'off')
+
+  expect(world.statuses).toEqual([DESIGNER_LINE, '@plain', '@thinker · high', '@worker · claude-opus-5-5[1m]', undefined])
+})
+
+test('the status line shows the resolved model of an alias', async ($, on) => {
+  const world = stage(on)
+  await begin($)
+  await as($, 'aliased')
+
+  expect(world.statuses).toEqual(['@aliased · claude-sonnet-5-5'])
+})
+
+test('the status line is cleared when the session turns out to be native', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'designer')
+  await $.classic.SessionStart({ source: 'startup', agent_type: 'architect' })
+
+  expect(world.statuses).toEqual([DESIGNER_LINE, undefined])
+})
+
+test('the status line is cleared when the first turn shows the session is native', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'designer')
+  await startTurnWithoutCompose($)
+
+  expect(world.statuses).toEqual([DESIGNER_LINE, undefined])
+})
+
+test('an agent restored from the store in a new process writes the status line with no /as', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS, store: { [keyOf(SESSION)]: saved('designer') } })
+  await begin($)
+
+  expect(world.statuses).toEqual([DESIGNER_LINE])
+})
+
+test('a start with no agent to restore does not touch the status line', async ($, on) => {
+  const world = stage(on, { store: { [keyOf(SESSION)]: saved(null, 'architect') } })
+  await begin($)
+
+  expect(world.statuses).toEqual([])
+})
+
+test('a start that cannot restore the saved agent does not touch the status line', async ($, on) => {
+  const world = stage(on, { store: { [keyOf(SESSION)]: saved('vanished') } })
+  await begin($)
+
+  expect(world.statuses).toEqual([])
+})
+
+test('a resume writes the status line for the agent of the session it enters and clears it when there is none', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS, store: { [keyOf('session-2')]: saved('thinker') } })
+  await begin($)
+  await as($, 'designer')
+  world.sessionId = 'session-2'
+  await $.classic.SessionStart({ source: 'resume' })
+
+  expect(world.statuses).toEqual([DESIGNER_LINE, '@thinker · high'])
+
+  world.sessionId = 'session-3'
+  await $.classic.SessionStart({ source: 'resume' })
+
+  expect(world.statuses).toEqual([DESIGNER_LINE, '@thinker · high', undefined])
+})
+
+test('a resume into a native session shows no status line for the agent saved beside it', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS, store: { [keyOf('session-2')]: saved('designer', 'architect') } })
+  await begin($)
+  await as($, 'thinker')
+  world.sessionId = 'session-2'
+  await $.classic.SessionStart({ source: 'resume' })
+
+  expect(world.statuses).toEqual(['@thinker · high', undefined])
+})
+
+test('a fork clears the status line when the new session has no agent', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'designer')
+  world.sessionId = 'session-3'
+  await $.classic.SessionStart({ source: 'fork' })
+
+  expect(world.statuses).toEqual([DESIGNER_LINE, undefined])
+})
+
+test('/as --reload rewrites the status line from the new file', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'designer')
+
+  world.files = world.files.map(entry =>
+    entry.file === pathOf('designer') ? { ...entry, text: agent('designer', 'effort: low\n') } : entry,
+  )
+  await as($, '--reload')
+
+  expect(world.statuses).toEqual([DESIGNER_LINE, '@designer · low'])
+  expect(await stepEffortOf($, world)).toBe('low')
+})
+
+test('/as off with no agent in force leaves the status line alone', async ($, on) => {
+  const world = stage(on)
+  await begin($)
+  await as($, 'off')
+
+  expect(world.statuses).toEqual([])
+})
+
+const submissions = async (world: Stage) => {
+  await world.clock.settle()
+
+  return world.submitted.length
+}
+
+test('/as on an agent with an initialPrompt submits the text once, as the user', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'starter')
+
+  expect(world.submitted).toEqual([])
+
+  await world.clock.settle()
+
+  expect(world.submitted).toEqual([
+    { text: 'start here', origin: { kind: 'plugin', name: 'agent-studio', asUser: true } },
+  ])
+})
+
+test('a failing submit does not undo the activation', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS, submitFail: true })
+  await begin($)
+
+  expect(await as($, 'starter')).toContain('Agente starter ativo.')
+  expect(await submissions(world)).toBe(0)
+  expect(world.store.get(keyOf(SESSION))).toEqual({ ...saved('starter'), at: NOW })
+  expect((await sectionsOf($))[0]?.id).toBe('agent-studio:agent')
+})
+
+test('an agent without an initialPrompt, or with an empty one, submits nothing', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'plain')
+  await as($, 'blank-start')
+
+  expect(await submissions(world)).toBe(0)
+})
+
+test('/as refused for an unknown name submits nothing', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'nobody')
+
+  expect(await submissions(world)).toBe(0)
+})
+
+test('/as refused in a native session submits nothing', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await $.classic.SessionStart({ source: 'startup', agent_type: 'architect' })
+  await as($, 'starter')
+
+  expect(await submissions(world)).toBe(0)
+})
+
+test('an agent with an initialPrompt restored from the store in a new process submits nothing', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS, store: { [keyOf(SESSION)]: saved('starter') } })
+  await begin($)
+
+  expect(await as($, '?')).toContain('Agente ativo: starter')
+  expect(await submissions(world)).toBe(0)
+})
+
+test('/clear with an initialPrompt agent in force submits nothing', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS, store: { [keyOf(SESSION)]: saved('starter') } })
+  await begin($)
+  world.sessionId = 'session-2'
+  await $.classic.SessionStart({ source: 'clear' })
+
+  expect(await as($, '?')).toContain('Agente ativo: starter')
+  expect(await submissions(world)).toBe(0)
+})
+
+test('a resume or a fork into a session whose agent has an initialPrompt submits nothing', async ($, on) => {
+  const world = stage(on, {
+    agents: WITH_EXTRAS,
+    store: { [keyOf('session-2')]: saved('starter'), [keyOf('session-3')]: saved('starter') },
+  })
+  await begin($)
+  world.sessionId = 'session-2'
+  await $.classic.SessionStart({ source: 'resume' })
+
+  expect(await as($, '?')).toContain('Agente ativo: starter')
+
+  world.sessionId = 'session-3'
+  await $.classic.SessionStart({ source: 'fork' })
+
+  expect(await as($, '?')).toContain('Agente ativo: starter')
+  expect(await submissions(world)).toBe(0)
+})
+
+test('/as --reload with an initialPrompt agent in force submits nothing', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS, store: { [keyOf(SESSION)]: saved('starter') } })
+  await begin($)
+  await as($, '--reload')
+
+  expect(await as($, '?')).toContain('Agente ativo: starter')
+  expect(await submissions(world)).toBe(0)
+})
+
+test('a classic SessionStart that names a native agent submits nothing', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS, store: { [keyOf(SESSION)]: saved('starter') } })
+  await begin($)
+  await $.classic.SessionStart({ source: 'startup', agent_type: 'architect' })
+
+  expect(await submissions(world)).toBe(0)
+})
+
+test('a classic SessionStart with an agent_type before session.start saves only launcher:<id> and the session stays native', async ($, on) => {
+  const world = stage(on)
+  await $.classic.SessionStart({ source: 'startup', agent_type: 'architect' })
+
+  expect([...world.store.keys()]).toEqual([keyOf(SESSION)])
+
+  await begin($)
+
+  expect([...world.store.keys()]).toEqual([keyOf(SESSION)])
+  expect(world.store.get(keyOf(SESSION))).toEqual({ agent: null, native: 'architect', at: NOW })
+  expect(await as($, '?')).toContain('já roda como o agente architect')
+})
+
+test('session.start keeps a native agent found before it when the saved entry carries none', async ($, on) => {
+  const world = stage(on, { settings: { agent: 'plain' } })
+  await $.classic.SessionStart({ source: 'startup', agent_type: 'architect' })
+  world.store.delete(keyOf(SESSION))
+  await begin($)
+
+  expect(await as($, '?')).toContain('já roda como o agente architect')
+  expect(world.store.has(keyOf(SESSION))).toBe(false)
+  expect(world.statuses.filter(text => text !== undefined)).toEqual([])
+})
+
+test('a new session with the settings agent starts with it in force and saved, with no row, no toast and no submit', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS, settings: { agent: 'starter' } })
+  await begin($)
+
+  expect((await sectionsOf($))[0]?.id).toBe('agent-studio:agent')
+  expect(world.store.get(keyOf(SESSION))).toEqual({ ...saved('starter'), at: NOW, byDefault: true })
+  expect(world.statuses).toEqual(['@starter'])
+  expect(world.toasts).toEqual([])
+  expect(world.session.appended()).toHaveLength(0)
+  expect(await submissions(world)).toBe(0)
+})
+
+test('the settings agent restricts tools and moves the model like a /as would', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS, settings: { agent: 'restricted' } })
+  await begin($)
+
+  expect((await useTool($, world, 'Bash')).reached).toBe(false)
+  expect(await as($, '?')).toContain('Agente ativo: restricted (projeto)')
+})
+
+test('a start without the agent key lists no folder and saves nothing', async ($, on) => {
+  const world = stage(on, { settings: { model: 'opus' } })
+  await begin($)
+
+  expect(world.lists).toEqual([])
+  expect(world.reads).toEqual([])
+  expect(world.store.size).toBe(0)
+  expect(world.statuses).toEqual([])
+})
+
+test('an agent key that that is not a string is ignored', async ($, on) => {
+  const world = stage(on, { settings: { agent: 42 } })
+  await begin($)
+
+  expect(world.lists).toEqual([])
+  expect(world.store.size).toBe(0)
+})
+
+test('an empty agent key is ignored', async ($, on) => {
+  const world = stage(on, { settings: { agent: '' } })
+  await begin($)
+
+  expect(world.lists).toEqual([])
+  expect(world.store.size).toBe(0)
+})
+
+test('/as off in a session with the settings agent is saved as the user choice', async ($, on) => {
+  const world = stage(on, { settings: { agent: 'restricted' } })
+  await begin($)
+  await as($, 'off')
+
+  expect(world.store.get(keyOf(SESSION))).toEqual({ agent: null, native: null, at: NOW, optedOut: true })
+  expect(world.statuses).toEqual(['@restricted', undefined])
+})
+
+test('/as off survives a new process: the settings agent does not come back', async ($, on) => {
+  const world = stage(on, {
+    settings: { agent: 'restricted' },
+    store: { [keyOf(SESSION)]: { agent: null, native: null, at: 1, optedOut: true } },
+  })
+  await begin($)
+
+  expect(world.lists).toEqual([])
+  expect(await as($, '?')).toContain('Nenhum agente ativo')
+  expect((await useTool($, world, 'Bash')).reached).toBe(true)
+  expect(world.toasts).toEqual([])
+  expect(world.statuses).toEqual([])
+})
+
+test('/as off on an agent chosen by hand is saved as the user choice as well', async ($, on) => {
+  const world = stage(on)
+  await begin($)
+  await as($, 'plain')
+  await as($, 'off')
+
+  expect(world.store.get(keyOf(SESSION))).toEqual({ agent: null, native: null, at: NOW, optedOut: true })
+})
+
+test('/as x after /as off takes the opt-out and the default mark off the entry', async ($, on) => {
+  const world = stage(on, { settings: { agent: 'restricted' } })
+  await begin($)
+  await as($, 'off')
+  await as($, 'plain')
+
+  expect(world.store.get(keyOf(SESSION))).toEqual({ ...saved('plain'), at: NOW })
+
+  await as($, 'off')
+  await as($, 'plain')
+  await as($, 'off')
+
+  expect(world.store.get(keyOf(SESSION))).toEqual({ agent: null, native: null, at: NOW, optedOut: true })
+})
+
+test('/as x over the settings agent takes the default mark off the entry', async ($, on) => {
+  const world = stage(on, { settings: { agent: 'restricted' } })
+  await begin($)
+  await as($, 'plain')
+
+  expect(world.store.get(keyOf(SESSION))).toEqual({ ...saved('plain'), at: NOW })
+})
+
+test('an entry saved with an agent beats the settings agent', async ($, on) => {
+  const world = stage(on, { settings: { agent: 'restricted' }, store: { [keyOf(SESSION)]: saved('plain') } })
+  await begin($)
+
+  expect(await as($, '?')).toContain('Agente ativo: plain')
+  expect(world.lists).toEqual([])
+  expect(world.store.get(keyOf(SESSION))).toEqual(saved('plain'))
+})
+
+test('a restored settings agent keeps its default mark in the store', async ($, on) => {
+  const entry = { ...saved('restricted'), byDefault: true as const }
+  const world = stage(on, { settings: { agent: 'plain' }, store: { [keyOf(SESSION)]: entry } })
+  await begin($)
+
+  expect(await as($, '?')).toContain('Agente ativo: restricted')
+
+  await as($, '--reload')
+
+  expect(world.store.get(keyOf(SESSION))).toEqual({ ...entry, at: NOW })
+
+  await as($, 'off')
+
+  expect(world.store.get(keyOf(SESSION))).toEqual({ agent: null, native: null, at: NOW, optedOut: true })
+})
+
+test('a settings agent restored in a new process is dropped in silence when the session turns out native', async ($, on) => {
+  const entry = { ...saved('restricted'), byDefault: true as const }
+  const world = stage(on, { store: { [keyOf(SESSION)]: entry } })
+  await begin($)
+  await $.classic.SessionStart({ source: 'startup', agent_type: 'architect' })
+
+  expect(world.toasts).toEqual([])
+})
+
+test('an opt-out restored in a new process moves with /clear to the new session id', async ($, on) => {
+  const world = stage(on, {
+    settings: { agent: 'restricted' },
+    store: { [keyOf(SESSION)]: { agent: null, native: null, at: 1, optedOut: true } },
+  })
+  await begin($)
+  world.sessionId = 'session-2'
+  await $.classic.SessionStart({ source: 'clear' })
+
+  expect(world.store.get(keyOf('session-2'))).toEqual({ agent: null, native: null, at: NOW, optedOut: true })
+  expect(world.store.has(keyOf(SESSION))).toBe(false)
+})
+
+test('a native entry saved for the session beats the settings agent and shows no toast', async ($, on) => {
+  const world = stage(on, { settings: { agent: 'restricted' }, store: { [keyOf(SESSION)]: saved(null, 'architect') } })
+  await begin($)
+
+  expect(world.lists).toEqual([])
+  expect(await idsOf($)).toEqual(BASE_IDS)
+  expect(world.toasts).toEqual([])
+})
+
+test('a session that turns out native drops the settings agent in silence', async ($, on) => {
+  const world = stage(on, { settings: { agent: 'restricted' } })
+  await begin($)
+  await $.classic.SessionStart({ source: 'startup', agent_type: 'architect' })
+
+  expect(world.toasts).toEqual([])
+  expect(await idsOf($)).toEqual(BASE_IDS)
+  expect(world.store.get(keyOf(SESSION))).toEqual({ agent: null, native: 'architect', at: NOW })
+  expect(world.statuses).toEqual(['@restricted', undefined])
+})
+
+test('a first turn with no prompt.compose drops the settings agent in silence', async ($, on) => {
+  const world = stage(on, { settings: { agent: 'restricted' } })
+  await begin($)
+  await startTurnWithoutCompose($)
+
+  expect(world.toasts).toEqual([])
+  expect(world.store.get(keyOf(SESSION))).toEqual({ agent: null, native: '', at: NOW })
+})
+
+test('the toast for an agent chosen by hand stays when the session turns out native', async ($, on) => {
+  const world = stage(on, { settings: { agent: 'restricted' } })
+  await begin($)
+  await as($, 'plain')
+  await $.classic.SessionStart({ source: 'startup', agent_type: 'architect' })
+
+  expect(world.toasts).toHaveLength(1)
+  expect(world.toasts[0]).toContain('plain')
+})
+
+test('a settings agent missing from the catalog leaves the session without an agent, tells the user once and saves nothing', async ($, on) => {
+  const world = stage(on, { settings: { agent: 'ghost' } })
+  await begin($)
+
+  expect(world.toasts).toHaveLength(1)
+  expect(world.toasts[0]).toContain('"ghost"')
+  expect(world.store.size).toBe(0)
+  expect(world.statuses).toEqual([])
+  expect(await idsOf($)).toEqual(BASE_IDS)
+  expect(world.toasts).toHaveLength(1)
+})
+
+test('the settings agent is applied at the start only: not on /clear, resume or fork', async ($, on) => {
+  const world = stage(on, { settings: { agent: 'restricted' }, agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'off')
+  world.sessionId = 'session-2'
+  await $.classic.SessionStart({ source: 'resume' })
+
+  expect(await as($, '?')).toContain('Nenhum agente ativo')
+
+  world.sessionId = 'session-3'
+  await $.classic.SessionStart({ source: 'fork' })
+
+  expect(await as($, '?')).toContain('Nenhum agente ativo')
+  expect(world.store.has(keyOf('session-2'))).toBe(false)
+  expect(world.store.has(keyOf('session-3'))).toBe(false)
+})
+
+test('/clear carries the default mark and the opt-out to the new session id', async ($, on) => {
+  const world = stage(on, { settings: { agent: 'restricted' } })
+  await begin($)
+  world.sessionId = 'session-2'
+  await $.classic.SessionStart({ source: 'clear' })
+
+  expect(world.store.get(keyOf('session-2'))).toEqual({ ...saved('restricted'), at: NOW, byDefault: true })
+  expect(world.store.has(keyOf(SESSION))).toBe(false)
+
+  await as($, 'off')
+  world.sessionId = 'session-3'
+  await $.classic.SessionStart({ source: 'clear' })
+
+  expect(world.store.get(keyOf('session-3'))).toEqual({ agent: null, native: null, at: NOW, optedOut: true })
+  expect(world.store.has(keyOf('session-2'))).toBe(false)
+})
+
+test('a default mark that is not true is ignored, so the toast for a hand-chosen agent stays', async ($, on) => {
+  const world = stage(on, { store: { [keyOf(SESSION)]: { ...saved('plain'), byDefault: 1 } } })
+  await begin($)
+  await $.classic.SessionStart({ source: 'startup', agent_type: 'architect' })
+
+  expect(world.toasts).toHaveLength(1)
+})
+
+test('a spawn of a listed type reaches the bottom and an unlisted one is refused naming the allowed types', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'dispatcher')
+
+  const allowed = await spawnOf($, world, 'researcher')
+  const refused = await spawnOf($, world, 'implementer')
+
+  expect(allowed.reached).toBe(true)
+  expect(JSON.stringify(allowed.result)).toContain('spawned-1')
+  expect(refused.reached).toBe(false)
+  expect(JSON.stringify(refused.result)).toContain('dispatcher')
+  expect(JSON.stringify(refused.result)).toContain('researcher')
+  expect(JSON.stringify(refused.result)).toContain('implementer')
+  expect(world.spawns.map(spawn => spawn.subagentType)).toEqual(['researcher'])
+})
+
+test('Agent without parentheses lets any type through', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'free-dispatcher')
+
+  expect((await spawnOf($, world, 'implementer')).reached).toBe(true)
+  expect((await spawnOf($, world, 'researcher')).reached).toBe(true)
+})
+
+test('several Agent(...) entries add up their types', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'multi-dispatcher')
+
+  expect((await spawnOf($, world, 'a')).reached).toBe(true)
+  expect((await spawnOf($, world, 'b')).reached).toBe(true)
+  expect((await spawnOf($, world, 'c')).reached).toBe(true)
+  expect((await spawnOf($, world, 'd')).reached).toBe(false)
+})
+
+test('an allowlist with no Agent entry leaves spawn to the tool guard', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'reader')
+
+  expect((await spawnOf($, world, 'implementer')).reached).toBe(true)
+  expect((await useTool($, world, 'Agent')).reached).toBe(false)
+})
+
+test('a spawn from inside a subagent loop is not judged', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'dispatcher')
+
+  const nested = await spawnOf($, world, 'implementer', 'sub-1')
+
+  expect(nested.reached).toBe(true)
+  expect(world.spawns).toEqual([{ subagentType: 'implementer', parentAgentId: 'sub-1' }])
+})
+
+const SPAWNER: Plugin = {
+  name: 'spawner',
+  register(on) {
+    on('command.run', { command: 'spawn-other' }, async $ => {
+      const result = await $.agent.spawn({ prompt: 'go', description: 'go', subagentType: 'implementer' })
+
+      return { text: JSON.stringify(result) }
+    })
+  },
+}
+
+test('a spawn another plugin makes is not judged', { plugins: [SPAWNER] }, async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+  await as($, 'dispatcher')
+
+  await run($, 'spawn-other', '')
+
+  expect(world.spawns).toHaveLength(1)
+  expect((await spawnOf($, world, 'implementer')).reached).toBe(false)
+})
+
+test('with no agent in force, after /as off and in a native session every spawn passes', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS })
+  await begin($)
+
+  expect((await spawnOf($, world, 'implementer')).reached).toBe(true)
+
+  await as($, 'dispatcher')
+  await as($, 'off')
+
+  expect((await spawnOf($, world, 'implementer')).reached).toBe(true)
+
+  await as($, 'dispatcher')
+  await $.classic.SessionStart({ source: 'startup', agent_type: 'architect' })
+
+  expect((await spawnOf($, world, 'implementer')).reached).toBe(true)
+})
+
+test('a native entry saved beside an /as agent leaves every spawn through', async ($, on) => {
+  const world = stage(on, { agents: WITH_EXTRAS, store: { [keyOf(SESSION)]: saved('dispatcher', 'architect') } })
+  await begin($)
+
+  expect((await spawnOf($, world, 'implementer')).reached).toBe(true)
+})
+
 const definition = (extra: Partial<AgentDefinition>): AgentDefinition => ({
   name: 'pure',
   description: 'd',
@@ -943,4 +1709,133 @@ test('an agent with an empty body still gets a prompt section naming it', () => 
   const [section] = composeAsAgent(BASE_SECTIONS, definition({ body: '' }))
 
   expect(section?.text).toBe('You are the "pure" agent: d')
+})
+
+test('spawnDenial lets everything through without tools, without an Agent entry and with a bare Agent', () => {
+  expect(spawnDenial(definition({}), 'implementer')).toBeUndefined()
+  expect(spawnDenial(definition({ tools: ['Read', 'Grep'] }), 'implementer')).toBeUndefined()
+  expect(spawnDenial(definition({ tools: ['Agent', 'Read'] }), 'implementer')).toBeUndefined()
+  expect(spawnDenial(definition({ tools: ['Agent(a)', 'Agent'] }), 'implementer')).toBeUndefined()
+})
+
+test('spawnDenial takes the union of the Agent(...) names, trimmed, and names the agent and the types', () => {
+  const agent = definition({ name: 'lead', tools: ['Agent( a ,b)', 'Read', 'Agent(c)'] })
+
+  expect(spawnDenial(agent, 'a')).toBeUndefined()
+  expect(spawnDenial(agent, 'b')).toBeUndefined()
+  expect(spawnDenial(agent, 'c')).toBeUndefined()
+  expect(spawnDenial(agent, 'd')).toBe(
+    'The agent "lead" may only start these subagent types: a, b, c. "d" is not one of them. Use one of those or tell the user.',
+  )
+})
+
+test('spawnDenial matches the type exactly', () => {
+  const agent = definition({ tools: ['Agent(researcher)'] })
+
+  expect(spawnDenial(agent, 'Researcher')).toContain('"Researcher" is not one of them')
+  expect(spawnDenial(agent, 'researcher-2')).toContain('"researcher-2" is not one of them')
+})
+
+const catalogHostOf = (files: readonly Agent[], listed: string[]): Host => {
+  const byPath = new Map(files.map(({ file, text }) => [slashed(file), text]))
+
+  return {
+    cwd: async () => PROJECT,
+    root: async () => PROJECT,
+    home: async () => 'C:\\Users\\bruno',
+    list: async path => {
+      const dir = slashed(path).replace(/\/$/, '')
+
+      listed.push(dir)
+
+      return [...byPath.keys()]
+        .filter(file => file.startsWith(`${dir}/`) && !file.slice(dir.length + 1).includes('/'))
+        .map(file => ({ name: file.slice(dir.length + 1), kind: 'file' as const }))
+    },
+    read: async path => {
+      const text = byPath.get(slashed(path))
+
+      if (text === undefined) {
+        throw new Error(`ENOENT ${path}`)
+      }
+
+      return text
+    },
+    sessionId: async () => SESSION,
+    sessionModel: async () => SESSION_MODEL,
+    now: async () => NOW,
+    loadSaved: async () => null,
+    save: async () => undefined,
+    loadFlags: async () => ({ promptFrozen: false, composeSeen: false }),
+    saveFlags: async () => undefined,
+    appendHidden: async () => true,
+    notify: async () => undefined,
+    status: async () => undefined,
+    submit: async () => undefined,
+    defaultAgent: async () => undefined,
+  }
+}
+
+test('catalogView lists the resolved catalog with the active one marked, counts the skipped files and reads the folders once', async () => {
+  const listed: string[] = []
+  const host = catalogHostOf(
+    [...DEFAULT_AGENTS, { file: pathOf('broken'), text: '---\nname: broken\n---\nx' }],
+    listed,
+  )
+  const launcher = createLauncher({ modelAliases: 'sonnet=claude-sonnet-5-5' })
+
+  await launcher.start(host)
+
+  const first = await launcher.catalogView(host)
+  const byName = Object.fromEntries(first.agents.map(item => [item.name, item]))
+  const reads = listed.length
+
+  expect(first.agents).toHaveLength(11)
+  expect(first.agents.map(item => item.name).slice(0, 3)).toEqual(['aliased', 'careful', 'custom'])
+  expect(first.skipped).toBe(1)
+  expect(first.native).toBeNull()
+  expect(byName.worker).toEqual({
+    name: 'worker',
+    description: 'worker description',
+    source: 'project',
+    model: 'claude-opus-5-5[1m]',
+    tools: undefined,
+    isActive: false,
+  })
+  expect(byName.restricted?.tools).toEqual(['Read', 'Grep'])
+  expect(byName.aliased?.model).toBe('claude-sonnet-5-5')
+  expect(byName.lost?.model).toBeUndefined()
+  expect(byName.plain?.model).toBeUndefined()
+  expect(byName['home-only']?.source).toBe('user')
+  expect(first.agents.filter(item => item.isActive)).toEqual([])
+
+  await launcher.command(host, 'restricted')
+
+  const second = await launcher.catalogView(host)
+
+  expect(second.agents.filter(item => item.isActive).map(item => item.name)).toEqual(['restricted'])
+  expect(listed.length).toBe(reads)
+})
+
+test('catalogView reports the native name and marks no agent active in a native session', async () => {
+  const host = catalogHostOf(DEFAULT_AGENTS, [])
+  const launcher = createLauncher({})
+
+  await launcher.start(host)
+  await launcher.command(host, 'plain')
+  await launcher.classicStart(host, { source: 'startup', agent_type: 'architect' })
+
+  const view = await launcher.catalogView(host)
+
+  expect(view.native).toBe('architect')
+  expect(view.agents.some(item => item.isActive)).toBe(false)
+})
+
+test('catalogView of an empty catalog is an empty list with no skipped file', async () => {
+  const host = catalogHostOf([], [])
+  const launcher = createLauncher({})
+
+  await launcher.start(host)
+
+  expect(await launcher.catalogView(host)).toEqual({ agents: [], skipped: 0, native: null })
 })

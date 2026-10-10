@@ -11,6 +11,18 @@
       "description": "Liga o comando /as, que faz a sessão atuar como um agente de .claude/agents",
       "default": true
     },
+    "enableMonitor": {
+      "type": "boolean",
+      "title": "Monitor",
+      "description": "Liga o comando /agentes, que mostra os subagentes desta sessão e as outras sessões abertas",
+      "default": true
+    },
+    "shareAnswers": {
+      "type": "boolean",
+      "title": "Compartilhar respostas",
+      "description": "Publica até 300 caracteres da última resposta desta sessão para as outras sessões lerem em /agentes sessoes",
+      "default": true
+    },
     "modelAliases": {
       "type": "string",
       "title": "Apelidos de modelo",

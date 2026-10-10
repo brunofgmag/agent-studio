@@ -4,6 +4,10 @@ import type { AgentDefinition } from './frontmatter'
 
 export type ModelAliases = Readonly<Record<string, string>>
 
+export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+
+export type Effort = (typeof EFFORTS)[number]
+
 const AGENT_SECTION_ID = 'agent-studio:agent'
 const MCP_PREFIX = 'mcp__'
 
@@ -38,6 +42,12 @@ export const resolveModel = (
   return declared.includes('-') ? { model: declared } : { unresolved: declared }
 }
 
+export const effortOf = (agent: AgentDefinition): Effort | undefined => {
+  const declared = agent.effort?.toLowerCase()
+
+  return EFFORTS.find(effort => effort === declared)
+}
+
 const entryMatches = (entry: string, tool: string): boolean => {
   const name = entry.replace(/\(.*\)\s*$/s, '').trim()
 
@@ -62,6 +72,32 @@ export const toolDenial = (agent: AgentDefinition, tool: string): string | undef
   }
 
   return undefined
+}
+
+const SPAWN_ENTRY = /^Agent\s*(?:\((.*)\))?$/s
+
+const spawnTypesOf = (tools: readonly string[]): readonly string[] | undefined => {
+  const listed = tools.flatMap(entry => {
+    const match = SPAWN_ENTRY.exec(entry.trim())
+
+    return match === null ? [] : [match[1]]
+  })
+
+  if (listed.length === 0 || listed.includes(undefined)) {
+    return undefined
+  }
+
+  return listed.flatMap(names => (names ?? '').split(',').map(name => name.trim()).filter(name => name !== ''))
+}
+
+export const spawnDenial = (agent: AgentDefinition, subagentType: string): string | undefined => {
+  const allowed = agent.tools === undefined ? undefined : spawnTypesOf(agent.tools)
+
+  if (allowed === undefined || allowed.includes(subagentType)) {
+    return undefined
+  }
+
+  return `The agent "${agent.name}" may only start these subagent types: ${allowed.join(', ')}. "${subagentType}" is not one of them. Use one of those or tell the user.`
 }
 
 const toolPolicy = (agent: AgentDefinition): string =>

@@ -23,18 +23,91 @@ export type ActiveAgent = {
   path: string
 }
 
-export type SavedAgent = { name: string; path: string; source: AgentSource }
+export type CatalogAgent = {
+  name: string
+  description: string
+  source: AgentSource
+  model: string | undefined
+  tools: readonly string[] | undefined
+  isActive: boolean
+}
+
+export type CatalogView = {
+  agents: readonly CatalogAgent[]
+  skipped: number
+  native: string | null
+}
+
+export type SavedAgent ={ name: string; path: string; source: AgentSource }
 
 export type SavedSession = {
   agent: SavedAgent | null
   native: string | null
   at: number
+  byDefault?: true
+  optedOut?: true
+}
+
+export type SessionState = {
+  active: ActiveAgent | null
+  native: string | null
+  byDefault: boolean
+  optedOut: boolean
 }
 
 export type ProcessFlags = {
   promptFrozen: boolean
   composeSeen: boolean
 }
+
+export type SubagentStatus = 'running' | 'completed' | 'failed' | 'stopped'
+
+export type SubagentRow = {
+  id: string
+  type: string
+  task: string
+  prompt: string
+  model: string | null
+  parentId: string | null
+  background: boolean
+  status: SubagentStatus
+  tool: string | null
+  tokens: number
+  startedAt: number
+  endedAt: number | null
+  durationMs: number | null
+  answer: string
+}
+
+export type SubagentLine = SubagentRow & { depth: number }
+
+export type PublishedState = 'working' | 'idle' | 'ended'
+
+export type PublishedSubagent = {
+  type: string
+  task: string
+  status: SubagentStatus
+  tool: string | null
+  tokens: number
+}
+
+export type SessionEntry = {
+  cwd: string
+  repo: string | null
+  agent: string | null
+  model: string | null
+  state: PublishedState
+  turnStartedAt: number | null
+  subagents: readonly PublishedSubagent[]
+  lastAnswer?: string
+  updatedAt: number
+}
+
+export type SessionPresence = 'trabalhando' | 'ociosa' | 'inativa' | 'encerrada'
+
+export type OtherSession = Omit<SessionEntry, 'state'> & { sessionId: string; presence: SessionPresence }
+
+export type PaneTab = 1 | 2 | 3
 
 declare module 'claude-code' {
   interface PluginState {
